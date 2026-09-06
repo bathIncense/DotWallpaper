@@ -22,6 +22,14 @@ const store = useWallpaperStore();
 const updaterStore = useUpdaterStore();
 const appWindow = getCurrentWindow();
 
+// 检测是否为 macOS 平台
+function isMacOS(): boolean {
+  return navigator.platform?.toLowerCase().includes('mac') ?? false;
+}
+
+// Mac 平台使用原生窗口控制，隐藏自定义窗口控制
+const showMacWindowControls = computed(() => !isMacOS());
+
 // Naive UI 主题令牌：与 main.css 设计令牌对齐（冰蓝主色、圆角）
 const themeOverrides: GlobalThemeOverrides = {
   common: {
@@ -127,6 +135,14 @@ onMounted(() => {
   window.addEventListener("keydown", onKeydown);
   window.addEventListener("mousedown", onGlobalMouseDown);
   window.addEventListener("blur", store.closeContextMenu);
+  
+  // 首次打开且未设置目录时，自动弹出目录选择
+  if (!store.currentDir) {
+    setTimeout(() => {
+      void store.pickAndApplyDirectory();
+    }, 500);
+  }
+  
   setTimeout(() => {
     updaterStore.checkUpdate()
   }, 3000)

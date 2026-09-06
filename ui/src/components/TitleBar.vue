@@ -1,14 +1,23 @@
 <script setup lang="ts">
 // TitleBar - 自定义标题栏：可拖拽移动窗口 + 最小化/最大化/关闭
+// macOS 上使用原生窗口控制，隐藏自定义窗口控制按钮
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Images, Minus, Square, X, RefreshCw } from "lucide-vue-next";
 import SettingsCenter from "./SettingsCenter/SettingsCenter.vue";
 import { useUpdaterStore } from "@/stores/updater";
 import dotCode from "@/assets/dotCode.png";
-import { ref } from "vue";
+import { ref, computed } from "vue";
 
 const appWindow = getCurrentWindow();
 const updaterStore = useUpdaterStore();
+
+// 检测是否为 macOS 平台
+function isMacOS(): boolean {
+  return navigator.platform?.toLowerCase().includes('mac') ?? false;
+}
+
+// macOS 上使用原生交通灯，隐藏自定义窗口控制
+const showWindowControls = computed(() => !isMacOS());
 
 async function toggleMinimize() {
   const minimized = await appWindow.isMinimized();
@@ -24,8 +33,9 @@ async function closeWindow() {
   await appWindow.close();
 }
 
-// 双击标题栏（非窗口控制区）→ 最小化/还原
+// 双击标题栏（非窗口控制区）→ 最小化/还原（仅非 Mac）
 function onTitlebarDblclick(e: MouseEvent) {
+  if (!showWindowControls.value) return;
   const t = e.target as HTMLElement;
   if (t.closest(".window-controls")) return;
   void toggleMinimize();
@@ -60,6 +70,8 @@ function onTitlebarDblclick(e: MouseEvent) {
         </button>
         <!-- 设置中心 -->
         <SettingsCenter />
+        <!-- 窗口控制按钮：仅非 Mac 平台显示 -->
+        <template v-if="showWindowControls">
         <span class="divider mx-1 h-3.5 w-px shrink-0 bg-line"></span>
         <button
           class="ctrl-btn flex h-6 w-6 cursor-pointer items-center justify-center rounded-md text-dim transition-colors hover:bg-white/10 hover:text-tx"
@@ -82,6 +94,7 @@ function onTitlebarDblclick(e: MouseEvent) {
         >
           <X :size="14" :stroke-width="2" />
         </button>
+        </template>
       </div>
     </div>
   </header>
