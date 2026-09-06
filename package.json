@@ -4,7 +4,12 @@
   "version": "0.1.2",
   "description": "DotWallpaper Tauri entry",
   "scripts": {
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "build:mac": "tauri build --target aarch64-apple-darwin --bundles app,dmg --config src-tauri/tauri.macos.conf.json",
+    "build:mac:app": "tauri build --target aarch64-apple-darwin --bundles app --config src-tauri/tauri.macos.conf.json",
+    "build:win": "tauri build --bundles msi,nsis"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

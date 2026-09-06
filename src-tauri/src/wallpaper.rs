@@ -2,14 +2,20 @@
 // - 设置/获取桌面壁纸：Win32 SystemParametersInfoW
 // - 扫描本地壁纸目录（Windows 自带壁纸目录 + 用户图片文件夹）
 
-use std::ffi::c_void;
 use std::path::PathBuf;
+
+#[cfg(target_os = "windows")]
+use std::ffi::c_void;
+#[cfg(target_os = "windows")]
 use windows::core::PCWSTR;
+#[cfg(target_os = "windows")]
 use windows::Win32::Foundation::WIN32_ERROR;
+#[cfg(target_os = "windows")]
 use windows::Win32::System::Registry::{
     RegCloseKey, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER,
     KEY_READ, KEY_SET_VALUE, REG_SZ, REG_VALUE_TYPE,
 };
+#[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{
     SystemParametersInfoW, SPI_GETDESKWALLPAPER, SPI_SETDESKWALLPAPER,
     SPIF_SENDCHANGE, SPIF_UPDATEINIFILE,
@@ -41,6 +47,7 @@ fn wallpaper_dirs() -> Vec<PathBuf> {
 }
 
 /// 通过 Win32 SystemParametersInfoW(SPI_SETDESKWALLPAPER) 设置桌面壁纸
+#[cfg(target_os = "windows")]
 pub fn set_wallpaper_win32(path: &str) -> Result<(), String> {
     if path.is_empty() {
         return Err("壁纸路径为空".into());
@@ -63,6 +70,7 @@ pub fn set_wallpaper_win32(path: &str) -> Result<(), String> {
 }
 
 /// 通过 Win32 SystemParametersInfoW(SPI_GETDESKWALLPAPER) 获取当前桌面壁纸路径
+#[cfg(target_os = "windows")]
 pub fn get_current_wallpaper_win32() -> Result<String, String> {
     let mut buffer = [0u16; 2048];
 
@@ -204,6 +212,7 @@ pub struct DesktopStyle {
 }
 
 /// 读取当前桌面壁纸展示样式（HKCU\Control Panel\Desktop）
+#[cfg(target_os = "windows")]
 pub fn get_desktop_wallpaper_style() -> Result<DesktopStyle, String> {
     let style = reg_str_value(r"Control Panel\Desktop", "WallpaperStyle")
         .and_then(|s| s.trim().parse::<u32>().ok())
@@ -218,6 +227,7 @@ pub fn get_desktop_wallpaper_style() -> Result<DesktopStyle, String> {
 ///
 /// - `style`：Windows WallpaperStyle 值（0=居中 6=适应 10=填充 22=拉伸）
 /// - `tile`：是否平铺（TileWallpaper=1，平铺优先于 style）
+#[cfg(target_os = "windows")]
 pub fn set_desktop_wallpaper_style(style: u32, tile: bool) -> Result<(), String> {
     if !matches!(style, 0 | 6 | 10 | 22) {
         return Err("不支持的壁纸样式".into());
@@ -253,6 +263,7 @@ pub fn set_desktop_wallpaper_style(style: u32, tile: bool) -> Result<(), String>
 }
 
 /// 写入注册表 REG_SZ 字符串值（值以 NUL 结尾）
+#[cfg(target_os = "windows")]
 fn set_reg_str(key: HKEY, name: &str, value: &str) -> Result<(), String> {
     let name_wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
     let value_wide: Vec<u16> = value.encode_utf16().chain(Some(0)).collect();
@@ -279,6 +290,7 @@ fn set_reg_str(key: HKEY, name: &str, value: &str) -> Result<(), String> {
 }
 
 /// 读取注册表 REG_SZ 字符串值
+#[cfg(target_os = "windows")]
 fn reg_str_value(subkey: &str, value: &str) -> Option<String> {
     let sub_wide: Vec<u16> = subkey.encode_utf16().chain(Some(0)).collect();
     let val_wide: Vec<u16> = value.encode_utf16().chain(Some(0)).collect();

@@ -123,6 +123,7 @@ onMounted(() => {
   void store.loadCurrentWallpaper();
   void store.loadDesktopStyle();
   void store.loadWallpapers();
+  void store.initPlatform(); // 初始化平台能力
   window.addEventListener("keydown", onKeydown);
   window.addEventListener("mousedown", onGlobalMouseDown);
   window.addEventListener("blur", store.closeContextMenu);

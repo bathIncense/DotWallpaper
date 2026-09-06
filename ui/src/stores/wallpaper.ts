@@ -4,6 +4,22 @@ import { defineStore } from "pinia";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { confirmDanger, toast } from "../lib/naive-host";
+import type {
+    PlatformCapabilities,
+    DisplayInfo,
+    WallpaperAssignment,
+    DisplayWallpaperState,
+    FitMode,
+} from "../types/media";
+import {
+    getPlatformCapabilities,
+    listDisplays,
+    applyWallpaper,
+    getWallpaperState,
+    pauseWallpaper,
+    resumeWallpaper,
+    stopWallpaper,
+} from "../lib/platform";
 
 // ---------- 类型 ----------
 export type WallpaperKind = "local" | "current";
@@ -94,10 +110,17 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
   let loadedCount = 0;
   let allEntries: WallpaperEntryData[] = [];
   let loadingMoreLock = false;
-  let hasMoreFlag = false;
+  const hasMoreFlag = ref(false); // 改为响应式
+
+  // ---- 平台状态 ----
+  const capabilities = ref<PlatformCapabilities | null>(null);
+  const displays = ref<DisplayInfo[]>([]);
+  const selectedDisplayId = ref<string>("");
+  const displayStates = ref<Map<string, DisplayWallpaperState>>(new Map());
+  const mediaKinds = ref<string[]>([]);
 
   // ---- Getter ----
-  const hasMore = computed(() => hasMoreFlag);
+  const hasMore = computed(() => hasMoreFlag.value);
   // 右侧大预览目标：优先"正在预览"，无预览时回退当前桌面壁纸
   const previewTarget = computed<WallpaperItem | null>(
     () => previewItem.value ?? currentWallpaper.value
@@ -145,7 +168,7 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
     gridItems.value = [];
     loadedCount = 0;
     allEntries = [];
-    hasMoreFlag = false;
+    hasMoreFlag.value = false;
     allCount.value = 0;
     await loadWallpapers();
   }
@@ -176,7 +199,7 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
     try {
       const s = (await invoke("get_wallpaper_style")) as { style: number; tile: boolean };
       desktopStyle.value = {
-        style: Number(s.style) || 10,
+        style: s.style ?? 10,
         tile: Boolean(s.tile),
       };
     } catch (err: unknown) {
@@ -266,11 +289,11 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
       });
       loadedCount++;
     });
-    hasMoreFlag = loadedCount < allEntries.length;
+    hasMoreFlag.value = loadedCount < allEntries.length;
   }
 
   async function loadMore() {
-    if (loadingMoreLock || !hasMoreFlag) return;
+    if (loadingMoreLock || !hasMoreFlag.value) return;
     loadingMoreLock = true;
     loadingMore.value = true;
     try {
@@ -399,6 +422,95 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
     }
   }
 
+  // ---- 平台操作 ----
+
+  /// 初始化平台能力
+  async function initPlatform() {
+    try {
+      capabilities.value = await getPlatformCapabilities();
+      displays.value = await listDisplays();
+      mediaKinds.value = capabilities.value.media_kinds;
+
+      // 默认选择主显示器
+      const primary = displays.value.find((d) => d.primary);
+      if (primary) {
+        selectedDisplayId.value = primary.id;
+      } else if (displays.value.length > 0) {
+        selectedDisplayId.value = displays.value[0].id;
+      }
+    } catch (err: unknown) {
+      console.error("初始化平台失败:", err);
+    }
+  }
+
+  /// 选择显示器
+  function selectDisplay(displayId: string) {
+    selectedDisplayId.value = displayId;
+  }
+
+  /// 应用壁纸到当前选中的显示器
+  async function applyToSelectedDisplay(
+    mediaId: string,
+    fitMode: FitMode,
+    muted: boolean = true
+  ): Promise<boolean> {
+    if (!selectedDisplayId.value) {
+      toast("请先选择显示器", "warning");
+      return false;
+    }
+
+    const assignment: WallpaperAssignment = {
+      display_id: selectedDisplayId.value,
+      media_id: mediaId,
+      fit_mode: fitMode,
+      muted,
+    };
+
+    try {
+      const state = await applyWallpaper(assignment);
+      displayStates.value.set(selectedDisplayId.value, state);
+      return true;
+    } catch (err: unknown) {
+      toast("应用失败：" + ((err as Error)?.message || String(err)), "error");
+      return false;
+    }
+  }
+
+  /// 暂停当前显示器的动态壁纸
+  async function pauseCurrentDisplay() {
+    if (!selectedDisplayId.value) return;
+    try {
+      await pauseWallpaper(selectedDisplayId.value);
+      const state = displayStates.value.get(selectedDisplayId.value);
+      if (state) state.phase = "paused";
+    } catch (err: unknown) {
+      toast("暂停失败：" + ((err as Error)?.message || String(err)), "error");
+    }
+  }
+
+  /// 恢复当前显示器的动态壁纸
+  async function resumeCurrentDisplay() {
+    if (!selectedDisplayId.value) return;
+    try {
+      await resumeWallpaper(selectedDisplayId.value);
+      const state = displayStates.value.get(selectedDisplayId.value);
+      if (state) state.phase = "active";
+    } catch (err: unknown) {
+      toast("恢复失败：" + ((err as Error)?.message || String(err)), "error");
+    }
+  }
+
+  /// 停止当前显示器的动态壁纸
+  async function stopCurrentDisplay() {
+    if (!selectedDisplayId.value) return;
+    try {
+      await stopWallpaper(selectedDisplayId.value);
+      displayStates.value.delete(selectedDisplayId.value);
+    } catch (err: unknown) {
+      toast("停止失败：" + ((err as Error)?.message || String(err)), "error");
+    }
+  }
+
   return {
     // state
     source,
@@ -415,6 +527,12 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
     ctxY,
     ctxItem,
     ctxReadOnly,
+    // 平台状态
+    capabilities,
+    displays,
+    selectedDisplayId,
+    displayStates,
+    mediaKinds,
     // getters
     hasMore,
     previewTarget,
@@ -434,5 +552,12 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
     saveDroppedPaths,
     handleContextAction,
     removeWallpaper,
+    // 平台操作
+    initPlatform,
+    selectDisplay,
+    applyToSelectedDisplay,
+    pauseCurrentDisplay,
+    resumeCurrentDisplay,
+    stopCurrentDisplay,
   };
 });

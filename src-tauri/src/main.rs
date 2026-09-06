@@ -1,15 +1,32 @@
 // DotWallpaper 壁纸工具 - Tauri 后端入口
-// 通过 Win32 SystemParametersInfoW 设置/获取桌面壁纸
-// 本地壁纸源 + 拖入图片保存
+// 支持 Windows (Win32) 和 macOS (AppKit/AVFoundation)
+// 本地壁纸源 + 拖入图片保存 + 视频/GIF/动态 HEIC
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod thumbs;
 mod wallpaper;
+mod platform;
 
+use platform::Platform;
 use serde::Serialize;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::Mutex;
 use tauri::Manager;
+
+/// 平台实例（全局共享）
+struct PlatformState {
+    platform: Arc<Mutex<Box<dyn Platform>>>,
+}
+
+impl PlatformState {
+    fn new() -> Self {
+        Self {
+            platform: Arc::new(Mutex::new(platform::current())),
+        }
+    }
+}
 
 /// 设置壁纸命令的统一返回：设置成功后返回实际使用的本地路径
 #[derive(Serialize, Clone)]
@@ -27,17 +44,33 @@ struct SaveDroppedPathsResult {
 /// 获取当前桌面壁纸展示样式（用于按真实电脑效果预览）
 #[tauri::command]
 async fn get_wallpaper_style() -> Result<wallpaper::DesktopStyle, String> {
-    tauri::async_runtime::spawn_blocking(wallpaper::get_desktop_wallpaper_style)
-        .await
-        .map_err(|e| e.to_string())?
+    #[cfg(target_os = "windows")]
+    {
+        tauri::async_runtime::spawn_blocking(wallpaper::get_desktop_wallpaper_style)
+            .await
+            .map_err(|e| e.to_string())?
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // macOS 暂不支持样式读取
+        Err("macOS 暂不支持读取壁纸样式".to_string())
+    }
 }
 
 /// 设置桌面壁纸展示样式（写入注册表并立即刷新桌面生效）
 #[tauri::command]
-async fn set_desktop_style(style: u32, tile: bool) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || wallpaper::set_desktop_wallpaper_style(style, tile))
-        .await
-        .map_err(|e| e.to_string())?
+async fn set_desktop_style(_style: u32, _tile: bool) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        tauri::async_runtime::spawn_blocking(move || wallpaper::set_desktop_wallpaper_style(style, tile))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // macOS 暂不支持样式设置
+        Err("macOS 暂不支持设置壁纸样式".to_string())
+    }
 }
 
 /// 获取主屏幕逻辑分辨率与缩放比（用于按真实电脑屏幕比例预览）
@@ -85,23 +118,57 @@ async fn set_wallpaper(
     let save_dir = resolve_save_dir(dir);
     ensure_asset_scope(&app, &save_dir);
 
-    // SystemParametersInfoW(SPI_SETDESKWALLPAPER) 为同步系统广播，会等待
-    // explorer 完成壁纸应用才返回；放入 blocking 线程避免卡死窗口主线程。
-    let set_path = path.clone();
-    let res: Result<(), String> =
-        tauri::async_runtime::spawn_blocking(move || wallpaper::set_wallpaper_win32(&set_path))
-            .await
-            .map_err(|e| e.to_string())?;
-    res?;
+    #[cfg(target_os = "windows")]
+    {
+        // SystemParametersInfoW(SPI_SETDESKWALLPAPER) 为同步系统广播，会等待
+        // explorer 完成壁纸应用才返回；放入 blocking 线程避免卡死窗口主线程。
+        let set_path = path.clone();
+        let res: Result<(), String> =
+            tauri::async_runtime::spawn_blocking(move || wallpaper::set_wallpaper_win32(&set_path))
+                .await
+                .map_err(|e| e.to_string())?;
+        res?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // macOS 使用 NSWorkspace 设置壁纸
+        let assignment = platform::WallpaperAssignment {
+            display_id: "main".to_string(),
+            media_id: format!("image/{}", path),
+            fit_mode: platform::FitMode::Fill,
+            muted: true,
+        };
+        let platform_state = app.state::<PlatformState>();
+        let p = platform_state.platform.lock().map_err(|e| e.to_string())?;
+        p.apply_wallpaper(&assignment, 0)?;
+    }
+
     Ok(SetWallpaperResult { path })
 }
 
 /// 获取当前桌面壁纸路径
 #[tauri::command]
-async fn get_current_wallpaper() -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(wallpaper::get_current_wallpaper_win32)
-        .await
-        .map_err(|e| e.to_string())?
+async fn get_current_wallpaper(app: tauri::AppHandle) -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        tauri::async_runtime::spawn_blocking(wallpaper::get_current_wallpaper_win32)
+            .await
+            .map_err(|e| e.to_string())?
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // macOS 通过 NSWorkspace 读取当前壁纸
+        let platform_state = app.state::<PlatformState>();
+        let p = platform_state.platform.lock().map_err(|e| e.to_string())?;
+        let displays = p.list_displays()?;
+        if let Some(display) = displays.iter().find(|d| d.primary) {
+            let state = p.get_wallpaper_state(&display.id)?;
+            state.system_wallpaper.ok_or_else(|| "未获取到当前壁纸".to_string())
+        } else {
+            Err("未找到主显示器".to_string())
+        }
+    }
 }
 
 /// 扫描壁纸目录并生成/复用缩略图，返回列表条目（原图路径 + 缩略图路径）
@@ -217,16 +284,101 @@ fn resolve_save_dir(dir: Option<String>) -> PathBuf {
             return PathBuf::from(t);
         }
     }
-    if let Ok(home) = std::env::var("USERPROFILE") {
-        return PathBuf::from(&home).join("Pictures");
+    // 跨平台：macOS 使用 HOME，Windows 使用 USERPROFILE
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(&home).join("Pictures");
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(home) = std::env::var("USERPROFILE") {
+            return PathBuf::from(&home).join("Pictures");
+        }
     }
     std::env::temp_dir()
 }
 
+// ========== 新平台命令 ==========
+
+/// 获取平台能力
+#[tauri::command]
+fn get_platform_capabilities(state: tauri::State<PlatformState>) -> Result<platform::PlatformCapabilities, String> {
+    let platform = state.platform.lock().map_err(|e| e.to_string())?;
+    Ok(platform.capabilities())
+}
+
+/// 枚举所有显示器
+#[tauri::command]
+fn list_displays(state: tauri::State<PlatformState>) -> Result<Vec<platform::DisplayInfo>, String> {
+    let platform = state.platform.lock().map_err(|e| e.to_string())?;
+    platform.list_displays()
+}
+
+/// 应用壁纸到指定显示器
+#[tauri::command]
+fn apply_wallpaper(
+    assignment: platform::WallpaperAssignment,
+    state: tauri::State<PlatformState>,
+) -> Result<platform::DisplayWallpaperState, String> {
+    let platform = state.platform.lock().map_err(|e| e.to_string())?;
+    // 生成请求 ID
+    let request_id = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    platform.apply_wallpaper(&assignment, request_id)
+}
+
+/// 获取指定显示器的壁纸状态
+#[tauri::command]
+fn get_wallpaper_state(
+    display_id: String,
+    state: tauri::State<PlatformState>,
+) -> Result<platform::DisplayWallpaperState, String> {
+    let platform = state.platform.lock().map_err(|e| e.to_string())?;
+    platform.get_wallpaper_state(&display_id)
+}
+
+/// 暂停指定显示器的动态壁纸
+#[tauri::command]
+fn pause_wallpaper(
+    display_id: String,
+    state: tauri::State<PlatformState>,
+) -> Result<(), String> {
+    let platform = state.platform.lock().map_err(|e| e.to_string())?;
+    platform.pause_wallpaper(&display_id)
+}
+
+/// 恢复指定显示器的动态壁纸
+#[tauri::command]
+fn resume_wallpaper(
+    display_id: String,
+    state: tauri::State<PlatformState>,
+) -> Result<(), String> {
+    let platform = state.platform.lock().map_err(|e| e.to_string())?;
+    platform.resume_wallpaper(&display_id)
+}
+
+/// 停止指定显示器的动态壁纸
+#[tauri::command]
+fn stop_wallpaper(
+    display_id: String,
+    state: tauri::State<PlatformState>,
+) -> Result<(), String> {
+    let platform = state.platform.lock().map_err(|e| e.to_string())?;
+    platform.stop_wallpaper(&display_id)
+}
+
 fn main() {
+    // 初始化平台状态
+    let platform_state = PlatformState::new();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
+        .manage(platform_state)
         .setup(|app| {
             // 启动时即把缩略图缓存目录加入 asset protocol scope，
             // 保证 WebView 可通过 asset/convertFileSrc 加载缩略图。
@@ -239,6 +391,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // 旧命令（保留过渡期兼容）
             set_wallpaper,
             get_current_wallpaper,
             list_local_wallpapers,
@@ -248,7 +401,15 @@ fn main() {
             delete_wallpaper,
             get_wallpaper_style,
             set_desktop_style,
-            get_desktop_screen
+            get_desktop_screen,
+            // 新平台命令
+            get_platform_capabilities,
+            list_displays,
+            apply_wallpaper,
+            get_wallpaper_state,
+            pause_wallpaper,
+            resume_wallpaper,
+            stop_wallpaper,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
