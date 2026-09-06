@@ -163,11 +163,21 @@ fn apply_dynamic_wallpaper(
 pub fn get_wallpaper_state(display_id: &str) -> Result<DisplayWallpaperState, String> {
     let state = DESKTOP_STATE.lock().map_err(|e| e.to_string())?;
 
-    state
+    // 如果显示器状态不存在，返回默认状态而非报错
+    Ok(state
         .display_states
         .get(display_id)
         .cloned()
-        .ok_or_else(|| format!("未找到显示器 {} 的状态", display_id))
+        .unwrap_or_else(|| DisplayWallpaperState {
+            display_id: display_id.to_string(),
+            request_id: 0,
+            revision: 0,
+            phase: "idle".to_string(),
+            desired_assignment: None,
+            actual_assignment: None,
+            system_wallpaper: None,
+            error: None,
+        }))
 }
 
 /// 创建桌面播放窗口

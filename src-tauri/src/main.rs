@@ -212,11 +212,17 @@ async fn list_system_wallpapers(app: tauri::AppHandle) -> Result<Vec<thumbs::Wal
 
 /// 弹出系统目录选择框，返回用户选择的目录路径（取消时返回 None）
 #[tauri::command]
-fn pick_wallpaper_directory(app: tauri::AppHandle) -> Result<Option<String>, String> {
+async fn pick_wallpaper_directory(app: tauri::AppHandle) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
 
-    let picked = app.dialog().file().blocking_pick_folder();
-    Ok(picked.map(|p| p.to_string().replace('/', "\\")))
+    // 使用 spawn_blocking 避免阻塞主线程
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog().file().blocking_pick_folder()
+    })
+    .await
+    .map_err(|e| format!("选择目录失败：{e}"))?
+    .map(|p| p.to_string());
+    Ok(picked)
 }
 
 /// 将原生拖放事件给出的本地文件路径保存到壁纸目录，返回保存成功与跳过列表

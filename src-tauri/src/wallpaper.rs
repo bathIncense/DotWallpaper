@@ -30,7 +30,34 @@ pub fn is_supported_image_ext(ext: &str) -> bool {
 }
 
 /// Windows 自带系统壁纸目录（只读展示，禁止删除/写入）
+#[cfg(target_os = "windows")]
 const SYSTEM_WALLPAPER_DIR: &str = r"C:\Windows\Web\Wallpaper";
+
+/// macOS 系统壁纸目录（只读展示）
+#[cfg(target_os = "macos")]
+const SYSTEM_WALLPAPER_DIR: &str = "/System/Library/Desktop Pictures";
+
+/// 获取系统壁纸目录列表（跨平台）
+fn system_wallpaper_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+
+    // 系统目录
+    let system_dir = PathBuf::from(SYSTEM_WALLPAPER_DIR);
+    if system_dir.is_dir() {
+        dirs.push(system_dir);
+    }
+
+    // macOS 额外的用户壁纸目录
+    #[cfg(target_os = "macos")]
+    {
+        let library_dir = PathBuf::from("/Library/Desktop Pictures");
+        if library_dir.is_dir() {
+            dirs.push(library_dir);
+        }
+    }
+
+    dirs
+}
 
 /// 本地壁纸目录列表（用户图片文件夹）
 ///
@@ -112,9 +139,8 @@ pub fn scan_local_wallpapers(custom_dir: Option<String>) -> Result<Vec<String>, 
             }
             if let Ok(entries) = walk_dir(&dir) {
                 for path in entries {
-                    let normalized = path.replace('/', "\\");
-                    if seen.insert(normalized.clone()) {
-                        results.push(normalized);
+                    if seen.insert(path.clone()) {
+                        results.push(path);
                     }
                 }
             }
@@ -128,9 +154,8 @@ pub fn scan_local_wallpapers(custom_dir: Option<String>) -> Result<Vec<String>, 
         }
         if let Ok(entries) = walk_dir(&dir) {
             for path in entries {
-                let normalized = path.replace('/', "\\");
-                if seen.insert(normalized.clone()) {
-                    results.push(normalized);
+                if seen.insert(path.clone()) {
+                    results.push(path);
                 }
             }
         }
@@ -139,27 +164,31 @@ pub fn scan_local_wallpapers(custom_dir: Option<String>) -> Result<Vec<String>, 
     Ok(results)
 }
 
-/// 扫描 Windows 自带系统壁纸目录（含子目录），返回壁纸文件路径列表。
+/// 扫描系统壁纸目录（跨平台），返回壁纸文件路径列表。
 ///
 /// 仅供"系统壁纸"选项卡只读展示；调用方不得对返回路径执行删除/写入。
 pub fn scan_system_wallpapers() -> Result<Vec<String>, String> {
-    let dir = PathBuf::from(SYSTEM_WALLPAPER_DIR);
-    if !dir.is_dir() {
-        return Err(format!("系统壁纸目录不存在：{SYSTEM_WALLPAPER_DIR}"));
+    let dirs = system_wallpaper_dirs();
+    if dirs.is_empty() {
+        // 系统壁纸目录不存在时返回空列表而非报错
+        return Ok(Vec::new());
     }
 
     let mut results: Vec<String> = Vec::new();
-    if let Ok(entries) = walk_dir(&dir) {
-        for path in entries {
-            results.push(path.replace('/', "\\"));
+    for dir in dirs {
+        if let Ok(entries) = walk_dir(&dir) {
+            for path in entries {
+                results.push(path);
+            }
         }
     }
     Ok(results)
 }
 
-/// 判断路径是否位于 C:\Windows 系统目录下（大小写不敏感）。
-/// 用于系统壁纸只读约束：任何删除/写操作前必须拦截。
-fn is_under_windows_dir(path: &std::path::Path) -> bool {
+/// 判断路径是否位于系统目录下（只读保护）
+/// Windows: C:\Windows 等系统目录
+/// macOS: /System/Library/Desktop Pictures, /Library/Desktop Pictures
+fn is_under_system_dir(path: &std::path::Path) -> bool {
     let abs = if path.is_absolute() {
         path.to_path_buf()
     } else {
@@ -169,7 +198,20 @@ fn is_under_windows_dir(path: &std::path::Path) -> bool {
     };
     let norm = abs.canonicalize().unwrap_or(abs);
     let s = norm.to_string_lossy().replace('/', "\\").to_lowercase();
-    s.starts_with("c:\\windows") || s.starts_with("c:\\windows\\")
+
+    #[cfg(target_os = "windows")]
+    {
+        s.starts_with("c:\\windows") || s.starts_with("c:\\windows\\")
+    }
+    #[cfg(target_os = "macos")]
+    {
+        s.starts_with("/system/library/desktop pictures")
+            || s.starts_with("/library/desktop pictures")
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        false
+    }
 }
 
 /// 递归遍历目录，收集全部支持的图片文件
@@ -367,8 +409,8 @@ pub fn get_primary_screen_meta(app: &tauri::AppHandle) -> Result<ScreenMeta, Str
 /// 安全约束：C:\Windows 等系统路径下的壁纸一律只读，禁止删除。
 pub fn delete_wallpaper_file(path: &str) -> Result<(), String> {
     let p = PathBuf::from(path);
-    if is_under_windows_dir(&p) {
-        return Err("系统壁纸只读，禁止删除 Windows 系统目录下的文件".into());
+    if is_under_system_dir(&p) {
+        return Err("系统壁纸只读，禁止删除系统目录下的文件".into());
     }
     if p.is_dir() {
         return Err("不能删除目录".into());
