@@ -24,7 +24,7 @@ import {
 // ---------- 类型 ----------
 export type WallpaperKind = "local" | "current";
 
-/// 壁纸来源选项卡：local = 本地壁纸（可增删），system = Windows 自带系统壁纸（只读）
+/// 壁纸来源选项卡：local = 本地壁纸（可增删），system = macOS 系统壁纸（只读）
 export type WallpaperSource = "local" | "system";
 
 export interface WallpaperItem {
@@ -194,24 +194,10 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
     previewItem.value = item;
   }
 
-  // 读取系统当前壁纸样式（填充/适应等），供预览与"设为壁纸"使用
-  async function loadDesktopStyle() {
-    try {
-      const s = (await invoke("get_wallpaper_style")) as { style: number; tile: boolean };
-      desktopStyle.value = {
-        style: s.style ?? 10,
-        tile: Boolean(s.tile),
-      };
-    } catch (err: unknown) {
-      console.error("读取壁纸样式失败:", err);
-      desktopStyle.value = null;
-    }
-  }
-
-  // 将某张壁纸设为桌面壁纸；可选同步应用桌面样式（仅当与系统当前样式不一致时写注册表）
+  // 将某张壁纸设为桌面壁纸
   async function setItemAsDesktop(
     item: WallpaperItem,
-    style?: { style: number; tile: boolean }
+    _style?: { style: number; tile: boolean }
   ): Promise<boolean> {
     if (isApplying.value) return false;
     const path = item.path || "";
@@ -221,14 +207,6 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
     }
     isApplying.value = true;
     try {
-      if (
-        style &&
-        desktopStyle.value &&
-        (style.style !== desktopStyle.value.style || style.tile !== desktopStyle.value.tile)
-      ) {
-        await invoke("set_desktop_style", { style: style.style, tile: style.tile });
-        desktopStyle.value = { ...style };
-      }
       const result = await doSetWallpaper(item);
       currentWallpaper.value = {
         key: "current_" + (result.path || ""),
@@ -245,7 +223,7 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
     }
   }
 
-  // 将右侧正在预览（无预览时为当前桌面）的壁纸设为桌面（Ctrl+S / 设为壁纸按钮）
+  // 将右侧正在预览（无预览时为当前桌面）的壁纸设为桌面（⌘+S / 设为壁纸按钮）
   async function applyPreviewAsDesktop(
     style?: { style: number; tile: boolean }
   ): Promise<boolean> {

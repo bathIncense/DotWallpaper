@@ -42,11 +42,10 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["app", "dmg"],
     "createUpdaterArtifacts": false,
     "icon": [
-      "icons/icon.icns",
-      "icons/icon.ico"
+      "icons/icon.icns"
     ],
     "macOS": {
       "minimumSystemVersion": "12.0",

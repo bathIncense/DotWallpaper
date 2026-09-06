@@ -33,7 +33,6 @@ impl MacPlatform {
             ],
             multi_display: true,
             native_dynamic_heic: true, // 待 P0 验证确认
-            updater_enabled: false,    // 本地包不启用自动更新
         };
 
         Self { capabilities }
@@ -53,8 +52,9 @@ impl Platform for MacPlatform {
         &self,
         assignment: &WallpaperAssignment,
         request_id: u64,
+        mtm: &objc2_foundation::MainThreadMarker,
     ) -> Result<DisplayWallpaperState, String> {
-        desktop::apply_wallpaper(assignment, request_id)
+        desktop::apply_wallpaper(assignment, request_id, mtm)
     }
 
     fn get_wallpaper_state(&self, display_id: &str) -> Result<DisplayWallpaperState, String> {

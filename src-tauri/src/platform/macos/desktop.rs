@@ -7,12 +7,13 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use objc2::rc::Retained;
+use objc2::runtime::AnyObject;
 use objc2_app_kit::{
     NSBackingStoreType, NSColor, NSScreen, NSWindow, NSWindowCollectionBehavior,
     NSWindowStyleMask, NSWindowTitleVisibility, NSWorkspace,
 };
-use objc2_core_graphics::CGWindowLevelForKey;
-use objc2_foundation::{MainThreadMarker, NSString, NSURL};
+use objc2_core_graphics::{CGDirectDisplayID, CGDisplayIsMain, CGWindowLevelForKey};
+use objc2_foundation::{MainThreadMarker, NSArray, NSString, NSURL};
 
 use crate::platform::{
     DisplayWallpaperState, FitMode, WallpaperAssignment,
@@ -37,10 +38,11 @@ impl DesktopState {
 static DESKTOP_STATE: once_cell::sync::Lazy<Arc<Mutex<DesktopState>>> =
     once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(DesktopState::new())));
 
-/// 应用壁纸到指定显示器
+/// 应用壁纸到指定显示器（需传入主线程标记）
 pub fn apply_wallpaper(
     assignment: &WallpaperAssignment,
     request_id: u64,
+    mtm: &MainThreadMarker,
 ) -> Result<DisplayWallpaperState, String> {
     let mut state = DESKTOP_STATE.lock().map_err(|e| e.to_string())?;
     let display_id = assignment.display_id.clone();
@@ -63,12 +65,17 @@ pub fn apply_wallpaper(
         return Err(format!("媒体文件不存在: {}", path));
     }
 
+    // 获取目标屏幕
+    let screens = NSScreen::screens(*mtm);
+    let target_screen = find_target_screen(&screens, &display_id)
+        .ok_or_else(|| format!("未找到显示器: {}", display_id))?;
+
     if media_type == "video" || media_type == "gif" {
         // 动态壁纸：使用桌面播放层
-        apply_dynamic_wallpaper(&display_id, path, assignment, &mut state)?;
+        apply_dynamic_wallpaper(&display_id, path, assignment, &mut state, mtm, &target_screen)?;
     } else {
         // 静态壁纸：使用 NSWorkspace
-        apply_static_wallpaper(path, &assignment.fit_mode)?;
+        apply_static_wallpaper(path, &assignment.fit_mode, mtm, &target_screen)?;
     }
 
     // 更新状态
@@ -95,41 +102,102 @@ pub fn apply_wallpaper(
     Ok(display_state)
 }
 
+/// 根据 display_id 查找目标 NSScreen
+/// display_id 格式: "cgdisplay-{CGDirectDisplayID}" 或 "main"
+fn find_target_screen(screens: &NSArray<NSScreen>, display_id: &str) -> Option<Retained<NSScreen>> {
+    let count = screens.count();
+    if count == 0 {
+        return None;
+    }
+
+    if display_id == "main" || display_id.is_empty() {
+        // 查找主屏幕
+        for i in 0..count {
+            let screen = screens.objectAtIndex(i);
+            if let Some(screen_number) = screen.deviceDescription()
+                .objectForKey(&NSString::from_str("NSScreenNumber"))
+            {
+                let display_id_num: CGDirectDisplayID = unsafe {
+                    let obj: &AnyObject = &screen_number;
+                    objc2::msg_send![obj, unsignedLongValue]
+                };
+                if CGDisplayIsMain(display_id_num) {
+                    return Some(screen);
+                }
+            }
+        }
+        // 回退到第一个屏幕
+        return Some(screens.objectAtIndex(0));
+    }
+
+    // 解析 display_id: "cgdisplay-{CGDirectDisplayID}"
+    if let Some(id_str) = display_id.strip_prefix("cgdisplay-") {
+        if let Ok(target_id) = id_str.parse::<CGDirectDisplayID>() {
+            for i in 0..count {
+                let screen = screens.objectAtIndex(i);
+                if let Some(screen_number) = screen.deviceDescription()
+                    .objectForKey(&NSString::from_str("NSScreenNumber"))
+                {
+                    let display_id_num: CGDirectDisplayID = unsafe {
+                        let obj: &AnyObject = &screen_number;
+                        objc2::msg_send![obj, unsignedLongValue]
+                    };
+                    if display_id_num == target_id {
+                        return Some(screen);
+                    }
+                }
+            }
+        }
+    }
+
+    // 回退到第一个屏幕
+    Some(screens.objectAtIndex(0))
+}
+
 /// 应用静态图片壁纸（NSWorkspace）
-fn apply_static_wallpaper(path: &str, _fit_mode: &FitMode) -> Result<(), String> {
-    let mtm = MainThreadMarker::new().ok_or_else(|| "无法获取主线程标记".to_string())?;
+fn apply_static_wallpaper(path: &str, _fit_mode: &FitMode, _mtm: &MainThreadMarker, screen: &NSScreen) -> Result<(), String> {
+    // 创建 NSURL - 使用 fileURLWithPath: 而不是 fileURLWithString:
+    // fileURLWithPath: 接受本地文件路径，自动处理 file:// 方案和转义
+    let canonical_path = Path::new(path)
+        .canonicalize()
+        .map_err(|e| e.to_string())?
+        .display()
+        .to_string();
 
-    // 创建 NSURL
-    let url_string = format!(
-        "file://{}",
-        Path::new(path)
-            .canonicalize()
-            .map_err(|e| e.to_string())?
-            .display()
-    );
-
-    let ns_url = create_nsurl(&url_string)?;
-
-    // 获取主屏幕
-    let screens = NSScreen::screens(mtm);
-    let main_screen = screens.objectAtIndex(0);
+    let ns_url = create_nsurl_file(&canonical_path)?;
 
     // 获取 NSWorkspace
     let workspace = NSWorkspace::sharedWorkspace();
 
-    // TODO: 构建选项字典并调用 NSWorkspace.setDesktopImageURL
-    // 实际实现需要根据 objc2 API 调整
-    let _ = (ns_url, main_screen, workspace);
+    // 设置壁纸
+    let mut error: *mut objc2_foundation::NSError = std::ptr::null_mut();
+    let success: bool = unsafe {
+        objc2::msg_send![
+            &*workspace,
+            setDesktopImageURL: &*ns_url,
+            forScreen: screen,
+            options: std::ptr::null::<objc2_foundation::NSDictionary>(),
+            error: &mut error
+        ]
+    };
+
+    if !success {
+        if !error.is_null() {
+            let err = unsafe { &*error };
+            return Err(format!("设置壁纸失败: {err}"));
+        }
+        return Err("设置壁纸失败: 未知错误".to_string());
+    }
 
     Ok(())
 }
 
-/// 创建 NSURL
-fn create_nsurl(url_string: &str) -> Result<Retained<NSURL>, String> {
-    let ns_string = NSString::from_str(url_string);
-    // 使用 objc2 的 msg_send 宏调用 fileURLWithString:
+/// 创建文件 NSURL（使用 fileURLWithPath:）
+fn create_nsurl_file(path: &str) -> Result<Retained<NSURL>, String> {
+    let ns_string = NSString::from_str(path);
+    // 使用 fileURLWithPath: 创建本地文件 URL
     let url: Retained<NSURL> = unsafe {
-        objc2::msg_send![objc2::class!(NSURL), fileURLWithString: &*ns_string]
+        objc2::msg_send![objc2::class!(NSURL), fileURLWithPath: &*ns_string]
     };
     Ok(url)
 }
@@ -140,15 +208,11 @@ fn apply_dynamic_wallpaper(
     path: &str,
     assignment: &WallpaperAssignment,
     _state: &mut DesktopState,
+    _mtm: &MainThreadMarker,
+    screen: &NSScreen,
 ) -> Result<(), String> {
-    let mtm = MainThreadMarker::new().ok_or_else(|| "无法获取主线程标记".to_string())?;
-
-    // 获取主屏幕
-    let screens = NSScreen::screens(mtm);
-    let screen = screens.objectAtIndex(0);
-
     // 创建新的播放窗口
-    let window = create_playback_window(&screen)?;
+    let window = create_playback_window(screen)?;
 
     // 设置播放器
     crate::platform::macos::playback::setup_player(&window, path, display_id, assignment.muted)?;
@@ -190,17 +254,15 @@ fn create_playback_window(screen: &NSScreen) -> Result<Retained<NSWindow>, Strin
     let window: Retained<NSWindow> = unsafe {
         let cls = objc2::class!(NSWindow);
         let allocated: *mut NSWindow = objc2::msg_send![cls, alloc];
-        let window: *mut NSWindow = objc2::msg_send![allocated, initWithContentRect: frame
-                                         styleMask: NSWindowStyleMask::Borderless
-                                           backing: NSBackingStoreType::Buffered
+        let window: *mut NSWindow = objc2::msg_send![allocated, initWithContentRect: frame,
+                                         styleMask: NSWindowStyleMask::Borderless,
+                                           backing: NSBackingStoreType::Buffered,
                                              defer: false];
         Retained::from_raw(window).expect("窗口创建失败")
     };
 
     // 设置窗口层级（桌面壁纸层，在桌面图标之下）
-    let desktop_icon_level = unsafe {
-        CGWindowLevelForKey(objc2_core_graphics::CGWindowLevelKey::DesktopIconWindowLevelKey)
-    };
+    let desktop_icon_level = CGWindowLevelForKey(objc2_core_graphics::CGWindowLevelKey::DesktopIconWindowLevelKey);
     window.setLevel((desktop_icon_level - 1) as isize);
 
     // 设置窗口行为
@@ -217,8 +279,8 @@ fn create_playback_window(screen: &NSScreen) -> Result<Retained<NSWindow>, Strin
     window.setTitleVisibility(NSWindowTitleVisibility::Hidden);
     window.setHidesOnDeactivate(false);
 
-    // 显示窗口
-    window.makeKeyAndOrderFront(None);
+    // 显示窗口（不抢焦点）
+    window.orderFront(None);
 
     Ok(window)
 }

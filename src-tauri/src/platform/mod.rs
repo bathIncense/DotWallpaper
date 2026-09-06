@@ -1,18 +1,16 @@
 // DotWallpaper 平台抽象层
-// 为 Windows / macOS 提供统一的壁纸能力接口
+// 为 macOS 提供统一的壁纸能力接口
 
-#[cfg(target_os = "windows")]
-pub mod windows;
-#[cfg(target_os = "macos")]
 pub mod macos;
 
 use serde::Serialize;
 use serde::Deserialize;
+use objc2_foundation::MainThreadMarker;
 
 /// 平台能力探测结果
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct PlatformCapabilities {
-    /// 平台标识："windows" | "macos"
+    /// 平台标识："macos"
     pub platform: String,
     /// 支持的媒体类型
     pub media_kinds: Vec<String>,
@@ -22,15 +20,13 @@ pub struct PlatformCapabilities {
     pub multi_display: bool,
     /// 是否原生支持动态 HEIC
     pub native_dynamic_heic: bool,
-    /// 是否启用自动更新
-    pub updater_enabled: bool,
 }
 
 /// 显示器信息
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct DisplayInfo {
-    /// 显示器稳定标识（UUID 或系统标识）
+    /// 显示器稳定标识（CoreGraphics display ID）
     pub id: String,
     /// 显示器名称
     pub name: String,
@@ -150,6 +146,7 @@ pub trait Platform: Send + Sync {
         &self,
         assignment: &WallpaperAssignment,
         request_id: u64,
+        mtm: &MainThreadMarker,
     ) -> Result<DisplayWallpaperState, String>;
 
     /// 获取指定显示器的壁纸状态
@@ -170,16 +167,5 @@ pub trait Platform: Send + Sync {
 
 /// 获取当前平台的实现
 pub fn current() -> Box<dyn Platform> {
-    #[cfg(target_os = "macos")]
-    {
-        Box::new(macos::MacPlatform::new())
-    }
-    #[cfg(target_os = "windows")]
-    {
-        Box::new(windows::WinPlatform::new())
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        compile_error!("Unsupported platform: only macOS and Windows are supported");
-    }
+    Box::new(macos::MacPlatform::new())
 }

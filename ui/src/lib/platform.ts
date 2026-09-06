@@ -49,14 +49,9 @@ export function isMacOS(): boolean {
     return navigator.platform?.toLowerCase().includes('mac') ?? false;
 }
 
-/// 检查是否为 Windows 平台
-export function isWindows(): boolean {
-    return navigator.platform?.toLowerCase().includes('win') ?? false;
-}
-
 /// 获取跨平台快捷键前缀
 export function shortcutPrefix(): string {
-    return isMacOS() ? '⌘' : 'Ctrl';
+    return '⌘';
 }
 
 /// 获取平台特定的快捷键键名

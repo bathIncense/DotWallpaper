@@ -2,14 +2,12 @@
 // TitleBar - 自定义标题栏：可拖拽移动窗口 + 最小化/最大化/关闭
 // macOS 上使用原生窗口控制，隐藏自定义窗口控制按钮
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Images, Minus, Square, X, RefreshCw } from "lucide-vue-next";
+import { Images, Minus, Square, X } from "lucide-vue-next";
 import SettingsCenter from "./SettingsCenter/SettingsCenter.vue";
-import { useUpdaterStore } from "@/stores/updater";
 import dotCode from "@/assets/dotCode.png";
 import { ref, computed } from "vue";
 
 const appWindow = getCurrentWindow();
-const updaterStore = useUpdaterStore();
 
 // 检测是否为 macOS 平台
 function isMacOS(): boolean {
@@ -58,16 +56,6 @@ function onTitlebarDblclick(e: MouseEvent) {
 
     <div class="titlebar-right flex items-center">
       <div class="window-controls app-no-drag flex items-center gap-1">
-        <!-- 更新按钮：仅在发现新版本时显示（预留 .update-badge 样式） -->
-        <button
-          v-if="updaterStore.hasUpdate"
-          class="update-badge"
-          :title="'发现新版本 v' + updaterStore.latestVersion + '，点击查看更新'"
-          @click="updaterStore.openUpdateDialog()"
-        >
-          <RefreshCw :size="13" :stroke-width="2" />
-          <span class="dot"></span>
-        </button>
         <!-- 设置中心 -->
         <SettingsCenter />
         <!-- 窗口控制按钮：仅非 Mac 平台显示 -->
@@ -101,34 +89,4 @@ function onTitlebarDblclick(e: MouseEvent) {
 </template>
 
 <style scoped>
-.update-badge {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
-  color: var(--color-accent);
-  cursor: pointer;
-  transition: all 0.2s;
-}
-.update-badge:hover {
-  background: var(--color-accent-soft);
-}
-.update-badge .dot {
-  position: absolute;
-  top: 3px;
-  right: 3px;
-  width: 6px;
-  height: 6px;
-  background: var(--color-danger);
-  border-radius: 50%;
-  pointer-events: none;
-  animation: pulse 1.5s infinite;
-}
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
 </style>

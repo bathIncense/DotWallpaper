@@ -6,15 +6,11 @@
   "scripts": {
     "tauri": "tauri",
     "dev": "tauri dev",
-    "build": "tauri build",
+    "build": "tauri build --target aarch64-apple-darwin --bundles app,dmg --config src-tauri/tauri.macos.conf.json",
     "build:mac": "tauri build --target aarch64-apple-darwin --bundles app,dmg --config src-tauri/tauri.macos.conf.json",
-    "build:mac:app": "tauri build --target aarch64-apple-darwin --bundles app --config src-tauri/tauri.macos.conf.json",
-    "build:win": "tauri build --bundles msi,nsis"
+    "build:mac:app": "tauri build --target aarch64-apple-darwin --bundles app --config src-tauri/tauri.macos.conf.json"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"
-  },
-  "dependencies": {
-    "@tauri-apps/plugin-updater": "^2.11.0"
   }
 }

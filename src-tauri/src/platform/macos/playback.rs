@@ -1,12 +1,14 @@
 // macOS 桌面播放层
 // 使用 AVFoundation 实现视频/GIF 的桌面播放
-// 注意：此模块为 P0 原型结构，实际 AVPlayer 设置需要根据 objc2 API 调整
 
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use objc2_foundation::MainThreadMarker;
+use objc2::rc::Retained;
+use objc2_app_kit::NSWindow;
+use objc2_av_foundation::{AVAsset, AVPlayerItem, AVPlayerLayer, AVQueuePlayer, AVPlayerLooper};
+use objc2_foundation::{MainThreadMarker, NSArray, NSString, NSURL};
 
 /// 播放层状态
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,26 +44,52 @@ static PLAYBACK_STATE: once_cell::sync::Lazy<Arc<Mutex<HashMap<String, PlayerInf
     once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
 
 /// 设置播放器到指定窗口
-/// 注意：此函数为原型结构，实际 AVPlayer 设置需要根据 objc2 API 调整
 pub fn setup_player(
-    _window: &objc2_app_kit::NSWindow,
+    window: &NSWindow,
     file_path: &str,
     display_id: &str,
     muted: bool,
 ) -> Result<(), String> {
-    let _mtm = MainThreadMarker::new().ok_or_else(|| "无法获取主线程标记".to_string())?;
+    let mtm = MainThreadMarker::new().ok_or_else(|| "无法获取主线程标记".to_string())?;
 
     let path = Path::new(file_path);
     if !path.exists() {
         return Err(format!("文件不存在: {}", file_path));
     }
 
-    // TODO: 实现 AVPlayer 设置
-    // 1. 创建 AVAsset
-    // 2. 创建 AVPlayerItem
-    // 3. 创建 AVQueuePlayer + AVPlayerLooper
-    // 4. 创建 AVPlayerLayer 并添加到窗口
-    // 5. 设置静音并开始播放
+    // 创建 NSURL
+    let ns_string = NSString::from_str(file_path);
+    let url: Retained<NSURL> = unsafe {
+        objc2::msg_send![objc2::class!(NSURL), fileURLWithPath: &*ns_string]
+    };
+
+    // 创建 AVAsset
+    let asset = unsafe { AVAsset::assetWithURL(&url) };
+
+    // 创建 AVPlayerItem（需要 MainThreadMarker）
+    let player_item = unsafe { AVPlayerItem::playerItemWithAsset(&asset, mtm) };
+
+    // 创建 AVQueuePlayer（需要 NSArray 和 MainThreadMarker）
+    let items = NSArray::from_slice(&[&*player_item]);
+    let player = unsafe { AVQueuePlayer::queuePlayerWithItems(&*items, mtm) };
+
+    // 创建 AVPlayerLooper 实现循环播放
+    let _looper = unsafe { AVPlayerLooper::playerLooperWithPlayer_templateItem(&player, &player_item) };
+
+    // 创建 AVPlayerLayer
+    let player_layer = unsafe { AVPlayerLayer::playerLayerWithPlayer(Some(&player)) };
+
+    // 设置 layer 为窗口内容视图
+    if let Some(content_view) = window.contentView() {
+        content_view.setWantsLayer(true);
+        content_view.setLayer(Some(&player_layer));
+    }
+
+    // 设置静音
+    unsafe { player.setMuted(muted) };
+
+    // 开始播放
+    unsafe { player.play() };
 
     // 更新状态
     let mut state = PLAYBACK_STATE.lock().map_err(|e| e.to_string())?;

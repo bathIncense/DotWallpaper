@@ -1,6 +1,5 @@
 // macOS 动态 HEIC 检测与处理
 // 使用 ImageIO 检测 HEIC 文件的动态元数据
-// 注意：此模块为 P0 原型结构，实际元数据检测需要根据 objc2 API 调整
 
 use std::path::Path;
 
@@ -33,29 +32,26 @@ impl std::fmt::Display for HeicDynamicType {
 }
 
 /// 检测 HEIC 文件的动态类型
-/// 注意：此函数为原型结构，实际实现需要使用 ImageIO 读取 XMP 元数据
+/// TODO: 完整实现需要使用 ImageIO 读取 XMP 元数据中的 apple_desktop 标记
 pub fn detect_heic_type(path: &str) -> HeicDynamicType {
     let path_obj = Path::new(path);
     if !path_obj.exists() {
         return HeicDynamicType::Unknown;
     }
 
-    // TODO: 使用 ImageIO 读取 XMP 元数据
-    // 1. 创建 CGImageSource
-    // 2. 读取 kCGImagePropertyDictionary
-    // 3. 检查 apple_desktop:solar / h24 / apr 键
-
+    // 暂时返回 Static，完整实现需要 ImageIO XMP 元数据解析
     HeicDynamicType::Static
 }
 
 /// 获取 HEIC 帧数
+/// TODO: 完整实现需要使用 CGImageSourceGetCount
 pub fn get_heic_frame_count(path: &str) -> u32 {
     let path_obj = Path::new(path);
     if !path_obj.exists() {
         return 0;
     }
 
-    // TODO: 使用 CGImageSourceGetCount 获取帧数
+    // 暂时返回 1，完整实现需要 ImageIO
     1
 }
 
@@ -65,7 +61,7 @@ pub fn is_heic_file(path: &str) -> bool {
     path_obj
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.eq_ignore_ascii_case("heic"))
+        .map(|e| e.eq_ignore_ascii_case("heic") || e.eq_ignore_ascii_case("heif"))
         .unwrap_or(false)
 }
 

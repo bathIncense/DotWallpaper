@@ -8,12 +8,11 @@ export type FitMode = 'fill' | 'fit' | 'stretch' | 'center' | 'tile';
 
 /// 平台能力
 export interface PlatformCapabilities {
-    platform: 'windows' | 'macos';
+    platform: 'macos';
     media_kinds: string[];
     supported_fit_modes: string[];
     multi_display: boolean;
     native_dynamic_heic: boolean;
-    updater_enabled: boolean;
 }
 
 /// 显示器信息

@@ -19,9 +19,9 @@ const handler = (e: Event) => {
   }
 };
 
-// 快捷键：Ctrl + I → 拖放遮罩
+// 快捷键：⌘ + I → 拖放遮罩
 const handlerKey = (e: KeyboardEvent) => {
-  if (e.ctrlKey && e.key.toLowerCase() === "i") {
+  if (e.metaKey && e.key.toLowerCase() === "i") {
     e.preventDefault();
     isDragging.value = true;
   }

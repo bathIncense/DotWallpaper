@@ -10,13 +10,7 @@ jobs:
     permissions:
       contents: write
 
-    strategy:
-      fail-fast: false
-      matrix:
-        platform:
-          - windows-latest
-
-    runs-on: ${{ matrix.platform }}
+    runs-on: macos-14
 
     steps:
       - name: Checkout
@@ -33,13 +27,14 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
 
       # 对应你本地的：cd ui && npm install
       - name: Install frontend dependencies
         run: npm ci
         working-directory: ui
 
-      # 对应你本地最终执行 npm run tauri build
       # Tauri CLI 在根目录，所以必须安装根目录依赖
       - name: Install root dependencies
         run: npm ci

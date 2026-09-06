@@ -1,124 +1,70 @@
 // 壁纸相关后端实现：
-// - 设置/获取桌面壁纸：Win32 SystemParametersInfoW
-// - 扫描本地壁纸目录（Windows 自带壁纸目录 + 用户图片文件夹）
+// - macOS：扫描本地壁纸目录 + 用户图片文件夹
+// - 支持静态图片、视频、GIF、HEIC
 
 use std::path::PathBuf;
 
-#[cfg(target_os = "windows")]
-use std::ffi::c_void;
-#[cfg(target_os = "windows")]
-use windows::core::PCWSTR;
-#[cfg(target_os = "windows")]
-use windows::Win32::Foundation::WIN32_ERROR;
-#[cfg(target_os = "windows")]
-use windows::Win32::System::Registry::{
-    RegCloseKey, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER,
-    KEY_READ, KEY_SET_VALUE, REG_SZ, REG_VALUE_TYPE,
-};
-#[cfg(target_os = "windows")]
-use windows::Win32::UI::WindowsAndMessaging::{
-    SystemParametersInfoW, SPI_GETDESKWALLPAPER, SPI_SETDESKWALLPAPER,
-    SPIF_SENDCHANGE, SPIF_UPDATEINIFILE,
-};
-
 /// 支持的壁纸图片扩展名（列表扫描 / 拖入导入 / 删除共用同一权威列表）
-const SUPPORTED_EXTS: [&str; 5] = ["jpg", "jpeg", "png", "bmp", "webp"];
+const SUPPORTED_IMAGE_EXTS: [&str; 7] = ["jpg", "jpeg", "png", "bmp", "webp", "heic", "heif"];
+
+/// 支持的视频扩展名
+const SUPPORTED_VIDEO_EXTS: [&str; 3] = ["mp4", "mov", "m4v"];
+
+/// GIF 扩展名
+const SUPPORTED_GIF_EXTS: [&str; 1] = ["gif"];
 
 /// 是否受支持的壁纸图片扩展名（大小写不敏感）
 pub fn is_supported_image_ext(ext: &str) -> bool {
-    SUPPORTED_EXTS.iter().any(|s| s.eq_ignore_ascii_case(ext))
+    SUPPORTED_IMAGE_EXTS.iter().any(|s| s.eq_ignore_ascii_case(ext))
 }
 
-/// Windows 自带系统壁纸目录（只读展示，禁止删除/写入）
-#[cfg(target_os = "windows")]
-const SYSTEM_WALLPAPER_DIR: &str = r"C:\Windows\Web\Wallpaper";
+/// 是否受支持的视频扩展名
+pub fn is_supported_video_ext(ext: &str) -> bool {
+    SUPPORTED_VIDEO_EXTS.iter().any(|s| s.eq_ignore_ascii_case(ext))
+}
+
+/// 是否受支持的 GIF 扩展名
+pub fn is_supported_gif_ext(ext: &str) -> bool {
+    SUPPORTED_GIF_EXTS.iter().any(|s| s.eq_ignore_ascii_case(ext))
+}
+
+/// 是否受支持的媒体扩展名（图片、视频、GIF）
+pub fn is_supported_media_ext(ext: &str) -> bool {
+    is_supported_image_ext(ext) || is_supported_video_ext(ext) || is_supported_gif_ext(ext)
+}
 
 /// macOS 系统壁纸目录（只读展示）
-#[cfg(target_os = "macos")]
 const SYSTEM_WALLPAPER_DIR: &str = "/System/Library/Desktop Pictures";
 
-/// 获取系统壁纸目录列表（跨平台）
+/// macOS 额外的用户壁纸目录
+const SYSTEM_WALLPAPER_DIR_LIBRARY: &str = "/Library/Desktop Pictures";
+
+/// 获取系统壁纸目录列表
 fn system_wallpaper_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
 
-    // 系统目录
     let system_dir = PathBuf::from(SYSTEM_WALLPAPER_DIR);
     if system_dir.is_dir() {
         dirs.push(system_dir);
     }
 
-    // macOS 额外的用户壁纸目录
-    #[cfg(target_os = "macos")]
-    {
-        let library_dir = PathBuf::from("/Library/Desktop Pictures");
-        if library_dir.is_dir() {
-            dirs.push(library_dir);
-        }
+    let library_dir = PathBuf::from(SYSTEM_WALLPAPER_DIR_LIBRARY);
+    if library_dir.is_dir() {
+        dirs.push(library_dir);
     }
 
     dirs
 }
 
 /// 本地壁纸目录列表（用户图片文件夹）
-///
-/// Windows 自带壁纸目录已拆分为独立的"系统壁纸"源（scan_system_wallpapers），
-/// 不再混入本地列表，避免两个选项卡内容重复。
 fn wallpaper_dirs() -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = Vec::new();
 
-    if let Ok(home) = std::env::var("USERPROFILE") {
+    if let Ok(home) = std::env::var("HOME") {
         dirs.push(PathBuf::from(&home).join("Pictures"));
     }
 
     dirs
-}
-
-/// 通过 Win32 SystemParametersInfoW(SPI_SETDESKWALLPAPER) 设置桌面壁纸
-#[cfg(target_os = "windows")]
-pub fn set_wallpaper_win32(path: &str) -> Result<(), String> {
-    if path.is_empty() {
-        return Err("壁纸路径为空".into());
-    }
-
-    // 将路径转换为以 \0 结尾的 UTF-16 缓冲区
-    let mut path_utf16: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
-
-    unsafe {
-        SystemParametersInfoW(
-            SPI_SETDESKWALLPAPER,
-            0,
-            Some(path_utf16.as_mut_ptr() as *mut c_void),
-            SPIF_UPDATEINIFILE | SPIF_SENDCHANGE,
-        )
-        .map_err(|e| format!("设置壁纸失败 (Win32 错误: {e})"))?;
-    }
-
-    Ok(())
-}
-
-/// 通过 Win32 SystemParametersInfoW(SPI_GETDESKWALLPAPER) 获取当前桌面壁纸路径
-#[cfg(target_os = "windows")]
-pub fn get_current_wallpaper_win32() -> Result<String, String> {
-    let mut buffer = [0u16; 2048];
-
-    unsafe {
-        SystemParametersInfoW(
-            SPI_GETDESKWALLPAPER,
-            buffer.len() as u32,
-            Some(buffer.as_mut_ptr() as *mut c_void),
-            Default::default(),
-        )
-        .map_err(|e| format!("获取当前壁纸失败 (Win32 错误: {e})"))?;
-    }
-
-    let len = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
-    let path = String::from_utf16_lossy(&buffer[..len]);
-
-    if path.is_empty() {
-        return Err("未获取到当前壁纸路径（可能使用了幻灯片模式）".into());
-    }
-
-    Ok(path)
 }
 
 /// 扫描壁纸目录，返回全部壁纸文件路径列表。
@@ -164,7 +110,7 @@ pub fn scan_local_wallpapers(custom_dir: Option<String>) -> Result<Vec<String>, 
     Ok(results)
 }
 
-/// 扫描系统壁纸目录（跨平台），返回壁纸文件路径列表。
+/// 扫描系统壁纸目录，返回壁纸文件路径列表。
 ///
 /// 仅供"系统壁纸"选项卡只读展示；调用方不得对返回路径执行删除/写入。
 pub fn scan_system_wallpapers() -> Result<Vec<String>, String> {
@@ -186,7 +132,6 @@ pub fn scan_system_wallpapers() -> Result<Vec<String>, String> {
 }
 
 /// 判断路径是否位于系统目录下（只读保护）
-/// Windows: C:\Windows 等系统目录
 /// macOS: /System/Library/Desktop Pictures, /Library/Desktop Pictures
 fn is_under_system_dir(path: &std::path::Path) -> bool {
     let abs = if path.is_absolute() {
@@ -197,24 +142,13 @@ fn is_under_system_dir(path: &std::path::Path) -> bool {
             .join(path)
     };
     let norm = abs.canonicalize().unwrap_or(abs);
-    let s = norm.to_string_lossy().replace('/', "\\").to_lowercase();
+    let s = norm.to_string_lossy().to_lowercase();
 
-    #[cfg(target_os = "windows")]
-    {
-        s.starts_with("c:\\windows") || s.starts_with("c:\\windows\\")
-    }
-    #[cfg(target_os = "macos")]
-    {
-        s.starts_with("/system/library/desktop pictures")
-            || s.starts_with("/library/desktop pictures")
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        false
-    }
+    s.starts_with("/system/library/desktop pictures")
+        || s.starts_with("/library/desktop pictures")
 }
 
-/// 递归遍历目录，收集全部支持的图片文件
+/// 递归遍历目录，收集全部支持的媒体文件
 fn walk_dir(dir: &PathBuf) -> std::io::Result<Vec<String>> {
     let mut found: Vec<String> = Vec::new();
     let mut stack = vec![dir.clone()];
@@ -232,7 +166,7 @@ fn walk_dir(dir: &PathBuf) -> std::io::Result<Vec<String>> {
                 continue;
             }
             if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                if is_supported_image_ext(ext) {
+                if is_supported_media_ext(ext) {
                     if let Some(p) = path.to_str() {
                         found.push(p.to_string());
                     }
@@ -242,133 +176,6 @@ fn walk_dir(dir: &PathBuf) -> std::io::Result<Vec<String>> {
     }
 
     Ok(found)
-}
-
-/// 桌面壁纸展示样式（对应 Windows 个性化设置中的壁纸模式）
-#[derive(serde::Serialize, Clone, Copy)]
-pub struct DesktopStyle {
-    /// WallpaperStyle 注册表值：0=居中 6=适应 10=填充 22=拉伸
-    pub style: u32,
-    /// TileWallpaper 是否为 1（平铺优先）
-    pub tile: bool,
-}
-
-/// 读取当前桌面壁纸展示样式（HKCU\Control Panel\Desktop）
-#[cfg(target_os = "windows")]
-pub fn get_desktop_wallpaper_style() -> Result<DesktopStyle, String> {
-    let style = reg_str_value(r"Control Panel\Desktop", "WallpaperStyle")
-        .and_then(|s| s.trim().parse::<u32>().ok())
-        .unwrap_or(10);
-    let tile = reg_str_value(r"Control Panel\Desktop", "TileWallpaper")
-        .map(|s| s.trim() == "1")
-        .unwrap_or(false);
-    Ok(DesktopStyle { style, tile })
-}
-
-/// 设置桌面壁纸展示样式（写入 HKCU\Control Panel\Desktop 并立即刷新桌面生效）
-///
-/// - `style`：Windows WallpaperStyle 值（0=居中 6=适应 10=填充 22=拉伸）
-/// - `tile`：是否平铺（TileWallpaper=1，平铺优先于 style）
-#[cfg(target_os = "windows")]
-pub fn set_desktop_wallpaper_style(style: u32, tile: bool) -> Result<(), String> {
-    if !matches!(style, 0 | 6 | 10 | 22) {
-        return Err("不支持的壁纸样式".into());
-    }
-    let sub_wide: Vec<u16> = r"Control Panel\Desktop"
-        .encode_utf16()
-        .chain(Some(0))
-        .collect();
-    unsafe {
-        let mut key: HKEY = HKEY(std::ptr::null_mut());
-        let open = RegOpenKeyExW(
-            HKEY_CURRENT_USER,
-            PCWSTR(sub_wide.as_ptr()),
-            0,
-            KEY_READ | KEY_SET_VALUE,
-            &mut key,
-        );
-        if open != WIN32_ERROR(0) {
-            return Err(format!("打开桌面设置注册表失败: {}", open.0));
-        }
-        let r1 = set_reg_str(key, "WallpaperStyle", &style.to_string());
-        let r2 = set_reg_str(key, "TileWallpaper", if tile { "1" } else { "0" });
-        let _ = RegCloseKey(key);
-        r1?;
-        r2?;
-    }
-    // 注意：此处不再重新应用当前壁纸。
-    // 调用方（设为壁纸流程）写入样式后总会紧跟设置新壁纸，一次
-    // SystemParametersInfoW(SPI_SETDESKWALLPAPER) 即按新样式生效；
-    // 若在函数内先重应用旧壁纸，会多一次 SPI_SENDCHANGE 同步广播，
-    // 主线程需等待 explorer 应用完才返回，曾导致窗口长时间无响应。
-    Ok(())
-}
-
-/// 写入注册表 REG_SZ 字符串值（值以 NUL 结尾）
-#[cfg(target_os = "windows")]
-fn set_reg_str(key: HKEY, name: &str, value: &str) -> Result<(), String> {
-    let name_wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
-    let value_wide: Vec<u16> = value.encode_utf16().chain(Some(0)).collect();
-    // REG_SZ 数据以字节切片传入（windows crate 按切片长度自动计算 cbData）
-    let data: &[u8] = unsafe {
-        std::slice::from_raw_parts(
-            value_wide.as_ptr() as *const u8,
-            value_wide.len() * 2,
-        )
-    };
-    unsafe {
-        let rc = RegSetValueExW(
-            key,
-            PCWSTR(name_wide.as_ptr()),
-            0,
-            REG_SZ,
-            Some(data),
-        );
-        if rc != WIN32_ERROR(0) {
-            return Err(format!("写入注册表 {name} 失败: {}", rc.0));
-        }
-    }
-    Ok(())
-}
-
-/// 读取注册表 REG_SZ 字符串值
-#[cfg(target_os = "windows")]
-fn reg_str_value(subkey: &str, value: &str) -> Option<String> {
-    let sub_wide: Vec<u16> = subkey.encode_utf16().chain(Some(0)).collect();
-    let val_wide: Vec<u16> = value.encode_utf16().chain(Some(0)).collect();
-
-    unsafe {
-        let mut key: HKEY = HKEY(std::ptr::null_mut());
-        let open = RegOpenKeyExW(
-            HKEY_CURRENT_USER,
-            PCWSTR(sub_wide.as_ptr()),
-            0,
-            KEY_READ,
-            &mut key,
-        );
-        if open != WIN32_ERROR(0) {
-            return None;
-        }
-
-        let mut buf = [0u16; 32];
-        let mut size = (buf.len() * 2) as u32;
-        let mut typ: REG_VALUE_TYPE = REG_VALUE_TYPE(0);
-        let query = RegQueryValueExW(
-            key,
-            PCWSTR(val_wide.as_ptr()),
-            None,
-            Some(&mut typ),
-            Some(buf.as_mut_ptr() as *mut u8),
-            Some(&mut size),
-        );
-        let _ = RegCloseKey(key);
-
-        if query != WIN32_ERROR(0) || typ != REG_SZ {
-            return None;
-        }
-        let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-        Some(String::from_utf16_lossy(&buf[..len]))
-    }
 }
 
 /// 主屏幕元信息（逻辑分辨率 + 缩放比），用于按真实电脑屏幕效果预览
@@ -406,7 +213,7 @@ pub fn get_primary_screen_meta(app: &tauri::AppHandle) -> Result<ScreenMeta, Str
 
 /// 从本地磁盘永久删除壁纸文件（仅限支持的图片扩展名）
 ///
-/// 安全约束：C:\Windows 等系统路径下的壁纸一律只读，禁止删除。
+/// 安全约束：系统路径下的壁纸一律只读，禁止删除。
 pub fn delete_wallpaper_file(path: &str) -> Result<(), String> {
     let p = PathBuf::from(path);
     if is_under_system_dir(&p) {
@@ -424,7 +231,7 @@ pub fn delete_wallpaper_file(path: &str) -> Result<(), String> {
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())
         .unwrap_or_default();
-    if !is_supported_image_ext(&ext) {
+    if !is_supported_media_ext(&ext) {
         return Err("不支持的壁纸文件类型".into());
     }
 

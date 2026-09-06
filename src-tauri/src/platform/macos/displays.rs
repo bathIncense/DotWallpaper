@@ -3,7 +3,7 @@
 
 use objc2_core_graphics::{
     CGDirectDisplayID, CGDisplayBounds, CGDisplayIsMain, CGDisplayPixelsHigh, CGDisplayPixelsWide,
-    CGDisplaySerialNumber, CGDisplayModelNumber, CGDisplayUnitNumber, CGGetOnlineDisplayList,
+    CGGetOnlineDisplayList,
 };
 
 use crate::platform::DisplayInfo;
@@ -43,11 +43,9 @@ pub fn list_displays() -> Result<Vec<DisplayInfo>, String> {
 fn get_display_info(display_id: CGDirectDisplayID, index: usize) -> Option<DisplayInfo> {
     let bounds = CGDisplayBounds(display_id);
     let is_main = CGDisplayIsMain(display_id);
-    let serial = CGDisplaySerialNumber(display_id);
-    let model = CGDisplayModelNumber(display_id);
-    let unit = CGDisplayUnitNumber(display_id);
 
-    let id = format!("mac-display-{}-{}-{}", serial, model, unit);
+    // 使用简洁的 display ID 格式，便于在 apply_wallpaper 中匹配
+    let id = format!("cgdisplay-{}", display_id);
 
     let name = if is_main {
         "主显示器".to_string()

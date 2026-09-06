@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted } from "vue";
+import { onMounted, computed } from "vue";
 import {
   NConfigProvider,
   NDialogProvider,
@@ -14,12 +14,9 @@ import CurrentPanel from "./components/CurrentPanel.vue";
 import ContextMenu from "./components/ContextMenu.vue";
 import DropZone from "./components/DropZone.vue";
 import NaiveBridge from "./components/NaiveBridge.vue";
-import UpdateDialog from "./components/UpdateDialog.vue";
 import { useWallpaperStore } from "./stores/wallpaper";
-import { useUpdaterStore } from '@/stores/updater'
 
 const store = useWallpaperStore();
-const updaterStore = useUpdaterStore();
 const appWindow = getCurrentWindow();
 
 // 检测是否为 macOS 平台
@@ -107,13 +104,13 @@ async function onDropFiles(paths: string[]) {
 }
 
 function onKeydown(e: KeyboardEvent) {
-  // Ctrl+S = 将正在预览的壁纸设为桌面壁纸
-  if (e.ctrlKey && e.key.toLowerCase() === "s") {
+  // ⌘+S = 将正在预览的壁纸设为桌面壁纸
+  if (e.metaKey && e.key.toLowerCase() === "s") {
     e.preventDefault();
     void store.applyPreviewAsDesktop();
   }
-  // Ctrl+R = 重新加载壁纸列表
-  if (e.ctrlKey && e.key.toLowerCase() === "r") {
+  // ⌘+R = 重新加载壁纸列表
+  if (e.metaKey && e.key.toLowerCase() === "r") {
     e.preventDefault();
     void store.loadWallpapers();
   }
@@ -129,23 +126,18 @@ onMounted(() => {
   // 统一在父组件初始化：先恢复目录记忆，再加载数据
   store.restoreDir();
   void store.loadCurrentWallpaper();
-  void store.loadDesktopStyle();
   void store.loadWallpapers();
   void store.initPlatform(); // 初始化平台能力
   window.addEventListener("keydown", onKeydown);
   window.addEventListener("mousedown", onGlobalMouseDown);
   window.addEventListener("blur", store.closeContextMenu);
-  
+
   // 首次打开且未设置目录时，自动弹出目录选择
   if (!store.currentDir) {
     setTimeout(() => {
       void store.pickAndApplyDirectory();
     }, 500);
   }
-  
-  setTimeout(() => {
-    updaterStore.checkUpdate()
-  }, 3000)
 });
 </script>
 
@@ -177,9 +169,6 @@ onMounted(() => {
             <!-- 全局文件拖放接收 -->
             <DropZone @drop-files="onDropFiles" />
           </div>
-
-          <!-- 全局更新弹窗（TitleBar / 关于页共用） -->
-          <UpdateDialog />
         </NaiveBridge>
       </n-dialog-provider>
     </n-message-provider>

@@ -1,6 +1,6 @@
 // 缩略图管线：Rust 端为列表扫描到的壁纸生成 256px 缩略图缓存。
 //
-// - 缓存目录：Tauri app_cache_dir 下 thumbnails 子目录（普通用户目录，非 C:\Windows）
+// - 缓存目录：Tauri app_cache_dir 下 thumbnails 子目录
 // - 命名：基于原图绝对路径的 FNV-1a 64 稳定哈希（自实现；禁止 DefaultHasher，
 //   其种子每次进程启动随机，无法跨进程复用缓存）
 // - 编码：新生成缓存统一 JPEG quality 85（快速编码）；历史 WebP lossless（.webp）
@@ -63,7 +63,7 @@ pub fn cache_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(cache.join("thumbnails"))
 }
 
-/// FNV-1a 64 位稳定哈希：输入为原文件绝对路径（Windows 风格），
+/// FNV-1a 64 位稳定哈希：输入为原文件绝对路径，
 /// 跨进程固定不变，保证不同进程/启动之间缩略图文件名一致、可复用。
 fn fnv1a64(s: &str) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
@@ -83,7 +83,7 @@ fn cached_thumb(src: &str, cache: &Path) -> Option<String> {
     for ext in [THUMB_EXT, LEGACY_THUMB_EXT] {
         let p = cache.join(thumb_file_name(src, ext));
         if p.is_file() {
-            return Some(p.to_string_lossy().replace('/', "\\"));
+            return Some(p.to_string_lossy().to_string());
         }
     }
     None
@@ -116,7 +116,7 @@ fn ensure_thumb_generate(src: &str, cache: &Path) -> Option<String> {
         .ok()?;
     let target = cache.join(thumb_file_name(src, THUMB_EXT));
     std::fs::write(&target, &bytes).ok()?;
-    Some(target.to_string_lossy().replace('/', "\\"))
+    Some(target.to_string_lossy().to_string())
 }
 
 /// 跨列表请求的全局"正在后台生成"去重表：快速反复切换目录/来源时，

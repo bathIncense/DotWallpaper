@@ -8,38 +8,55 @@
 - Node.js 18+
 - Rust 稳定工具链
 
-## 快速开始
+## 安装步骤
 
-### 1. 安装依赖
+### 1. 安装 Xcode Command Line Tools
+
+```bash
+xcode-select --install
+```
+
+### 2. 安装 Rust
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+添加 Apple Silicon 目标：
+
+```bash
+rustup target add aarch64-apple-darwin
+```
+
+### 3. 安装 Node.js 依赖
 
 ```bash
 # 前端依赖
 cd ui
 npm install
 
-# Rust 依赖（首次构建时自动下载）
-cd ../src-tauri
-cargo fetch
+# 根目录依赖（Tauri CLI）
+cd ..
+npm install
 ```
 
-### 2. 开发模式
+## 开发模式
 
 ```bash
-# 在项目根目录
-npm run dev
+npm run tauri dev
 ```
 
-### 3. 构建 macOS 应用
+## 构建 macOS 应用
 
 ```bash
 # 构建 .app 和 .dmg
-npm run build:mac
+npm run build
 
 # 仅构建 .app
 npm run build:mac:app
 ```
 
-### 4. 构建产物
+## 构建产物
 
 - `.app`：`src-tauri/target/aarch64-apple-darwin/release/bundle/macos/DotWallpaper.app`
 - `.dmg`：`src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/DotWallpaper_0.1.2_aarch64.dmg`
@@ -48,75 +65,57 @@ npm run build:mac:app
 
 ```
 DotWallpaper/
-├── ui/                          # 前端项目
+├── ui/                              # 前端项目
 │   ├── src/
-│   │   ├── types/media.ts       # 媒体类型定义
-│   │   ├── lib/platform.ts      # 平台工具函数
-│   │   ├── stores/wallpaper.ts  # 壁纸状态管理
-│   │   └── ...
+│   │   ├── App.vue                  # 根组件
+│   │   ├── main.ts                  # 入口
+│   │   ├── styles/                  # 样式
+│   │   ├── lib/                     # 工具库
+│   │   ├── stores/                  # Pinia 状态
+│   │   └── components/              # 组件
+│   ├── index.html
 │   └── package.json
-├── src-tauri/                   # Rust 后端
+├── src-tauri/                       # Rust 后端
 │   ├── src/
-│   │   ├── platform/
-│   │   │   ├── mod.rs           # 平台 trait + DTO
-│   │   │   ├── windows.rs       # Windows 实现
-│   │   │   └── macos/
-│   │   │       ├── mod.rs       # macOS 平台入口
-│   │   │       ├── desktop.rs   # NSWorkspace + 播放窗口
-│   │   │       ├── displays.rs  # CGDisplay 枚举
-│   │   │       ├── playback.rs  # AVPlayer 状态管理
-│   │   │       └── heic.rs      # HEIC 检测
-│   │   ├── main.rs              # Tauri 入口
-│   │   └── ...
-│   ├── tauri.macos.conf.json    # macOS 打包配置
-│   ├── icons/icon.icns          # macOS 图标
-│   └── Cargo.toml
+│   │   ├── main.rs                  # Tauri 入口
+│   │   ├── wallpaper.rs             # 壁纸管理
+│   │   ├── thumbs.rs                # 缩略图管线
+│   │   └── platform/
+│   │       ├── mod.rs               # 平台 trait
+│   │       └── macos/
+│   │           ├── mod.rs           # macOS 入口
+│   │           ├── desktop.rs       # NSWorkspace + 播放
+│   │           ├── displays.rs      # CGDisplay
+│   │           ├── playback.rs      # AVFoundation
+│   │           └── heic.rs          # HEIC 检测
+│   ├── Cargo.toml
+│   ├── tauri.conf.json
+│   ├── tauri.macos.conf.json        # macOS 打包配置
+│   ├── capabilities/default.json
+│   └── icons/
+│       └── icon.icns                # macOS 图标
 ├── docs/
-│   └── p0-verification-checklist.md
+│   ├── build-guide.md               # 本文件
+│   └── p0-verification-checklist.md # P0 验证清单
+├── .github/workflows/workflow.yml   # CI 配置
+├── README.md
 └── package.json
 ```
 
-## 核心命令
+## 常见问题
 
-| 命令 | 描述 |
-|------|------|
-| `get_platform_capabilities` | 获取平台能力 |
-| `list_displays` | 枚举所有显示器 |
-| `apply_wallpaper` | 应用壁纸到指定显示器 |
-| `get_wallpaper_state` | 获取显示器壁纸状态 |
-| `pause_wallpaper` | 暂停动态壁纸 |
-| `resume_wallpaper` | 恢复动态壁纸 |
-| `stop_wallpaper` | 停止动态壁纸 |
+### 构建失败
 
-## 故障排除
-
-### 编译失败
 ```bash
 # 清理并重新构建
 cargo clean
 cargo build --target aarch64-apple-darwin
 ```
 
-### 前端构建失败
-```bash
-cd ui
-rm -rf node_modules
-npm install
-npm run build
-```
+### 签名与公证
 
-### 图标缺失
-```bash
-# 重新生成 icon.icns
-cd src-tauri/icons
-sips -s format png --resampleWidth 512 icon.png --out icon_512.png
-iconutil -c icns iconset -o icon.icns
-```
+发布版本需要 Apple Developer 账号进行签名和公证。开发构建无需签名即可在本地运行。
 
-## 后续步骤
+### 动态壁纸
 
-1. 完成 P0 实机验证
-2. 根据验证结果调整实现
-3. 添加 Developer ID 签名
-4. 配置自动更新
-5. 发布到 GitHub Releases
+视频/GIF 动态壁纸使用 AVFoundation 实现桌面播放层，需要 macOS 12+ 支持。
