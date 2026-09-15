@@ -25,3 +25,10 @@ tsconfig.tsbuildinfo
 src-tauri/target
 src-tauri/gen
 .tauri
+
+# MSIX 打包本地自签证书（含私钥，禁止提交）
+*.pfx
+*.cer
+
+# Development certificate
+src-tauri/devcert.pfx

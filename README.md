@@ -1,5 +1,6 @@
 # DotWallpaper
 
+简单、轻量的 Windows 壁纸切换工具，让你快速浏览并设置喜欢的桌面壁纸。
 Windows 桌面壁纸管理工具。基于 Tauri 2 + Rust + Vue 3 构建，提供本地壁纸管理、一键设壁、拖入导入与自定义目录能力，支持深色主题。
 
 ## 核心功能
@@ -137,3 +138,6 @@ Rust 后端暴露的 Tauri 命令：
 - macOS 版本适配
 
 ---
+
+## 参考文档
+使用 Tauri 的 winapp CLI  https://learn.microsoft.com/en-us/windows/apps/dev-tools/winapp-cli/guides/tauri#4-debug-with-identity

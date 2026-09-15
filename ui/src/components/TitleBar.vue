@@ -4,6 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Images, Minus, Square, X, RefreshCw } from "lucide-vue-next";
 import SettingsCenter from "./SettingsCenter/SettingsCenter.vue";
 import { useUpdaterStore } from "@/stores/updater";
+import { isStoreBuild } from "@/utils/updater";
 import dotCode from "@/assets/dotCode.png";
 import { ref } from "vue";
 
@@ -50,7 +51,7 @@ function onTitlebarDblclick(e: MouseEvent) {
       <div class="window-controls app-no-drag flex items-center gap-1">
         <!-- 更新按钮：仅在发现新版本时显示（预留 .update-badge 样式） -->
         <button
-          v-if="updaterStore.hasUpdate"
+          v-if="!isStoreBuild && updaterStore.hasUpdate"
           class="update-badge"
           :title="'发现新版本 v' + updaterStore.latestVersion + '，点击查看更新'"
           @click="updaterStore.openUpdateDialog()"

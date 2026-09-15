@@ -1,10 +1,12 @@
 {
   "name": "dot-wallpaper",
   "private": true,
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "DotWallpaper Tauri entry",
   "scripts": {
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "build-msix": "pwsh -File scripts/build-msix.ps1 -Sign",
+    "pack:msix": "npm run build-msix"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

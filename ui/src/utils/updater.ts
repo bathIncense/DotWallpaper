@@ -1,6 +1,12 @@
 import { check, type Update } from '@tauri-apps/plugin-updater'
 
 /**
+ * 是否为微软商店（MSIX）构建
+ * 商店版禁止应用在商店外自我更新，需剥离全部自更新入口
+ */
+export const isStoreBuild = import.meta.env.VITE_STORE_BUILD === '1'
+
+/**
  * 更新信息
  */
 export interface UpdateInfo {

@@ -17,6 +17,7 @@ import NaiveBridge from "./components/NaiveBridge.vue";
 import UpdateDialog from "./components/UpdateDialog.vue";
 import { useWallpaperStore } from "./stores/wallpaper";
 import { useUpdaterStore } from '@/stores/updater'
+import { isStoreBuild } from '@/utils/updater'
 
 const store = useWallpaperStore();
 const updaterStore = useUpdaterStore();
@@ -138,7 +139,7 @@ onMounted(() => {
   window.addEventListener("mousedown", onGlobalMouseDown);
   window.addEventListener("blur", store.closeContextMenu);
   setTimeout(() => {
-    updaterStore.checkUpdate()
+    if (!isStoreBuild) updaterStore.checkUpdate()
   }, 3000)
 });
 </script>

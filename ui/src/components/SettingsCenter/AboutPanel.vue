@@ -4,6 +4,7 @@ import { NButton, NIcon } from "naive-ui";
 import { Info, RefreshCw, Rocket, ArrowRight } from "lucide-vue-next";
 import dotCode from "@/assets/dotCode.png";
 import { useUpdaterStore } from "@/stores/updater";
+import { isStoreBuild } from "@/utils/updater";
 import { toast } from "@/lib/naive-host";
 
 defineProps<{ appName: string; appVersion: string }>();
@@ -49,12 +50,12 @@ async function handleCheckUpdate() {
             <span class="text-[14px] font-semibold text-tx">{{ appName }}</span>
             <span class="rounded-md bg-white/5 px-1.5 py-0.5 text-[10.5px] text-faint">v{{ appVersion }}</span>
           </div>
-          <p class="mt-0.5 text-[11px] text-faint">Windows 桌面壁纸管理工具</p>
+          <p class="mt-0.5 text-[11px] text-faint">简单、轻量的 Windows 壁纸切换工具，让你快速浏览并设置喜欢的桌面壁纸。</p>
         </div>
       </div>
 
       <!-- 检查更新 -->
-      <div class="upd-card-panel rounded-lg bg-panel-2 px-4 py-4">
+      <div v-if="!isStoreBuild" class="upd-card-panel rounded-lg bg-panel-2 px-4 py-4">
         <div class="flex items-center gap-2">
           <RefreshCw :size="13" class="shrink-0 text-accent" />
           <span class="text-[12px] font-medium text-tx">更新检查</span>
