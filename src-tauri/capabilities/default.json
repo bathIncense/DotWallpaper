@@ -12,6 +12,7 @@
     "core:window:allow-close",
     "core:window:allow-is-minimized",
     "dialog:default",
-    "updater:default"
+    "updater:default",
+    "opener:default"
   ]
 }

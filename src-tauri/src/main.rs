@@ -300,6 +300,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             // 启动时即把缩略图缓存目录加入 asset protocol scope，
             // 保证 WebView 可通过 asset/convertFileSrc 加载缩略图。

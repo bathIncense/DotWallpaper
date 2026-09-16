@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // 关于 - 应用信息 + 检查更新（发现新版本后弹出通用 UpdateDialog）
 import { NButton, NIcon } from "naive-ui";
-import { Info, RefreshCw, Rocket, ArrowRight } from "lucide-vue-next";
+import { Github, Info, RefreshCw, Rocket, ArrowRight } from "lucide-vue-next";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import dotCode from "@/assets/dotCode.png";
 import { useUpdaterStore } from "@/stores/updater";
 import { isStoreBuild } from "@/utils/updater";
@@ -30,6 +31,12 @@ async function handleCheckUpdate() {
     toast("当前已是最新版本", "success");
   }
 }
+
+const GITHUB_URL = "https://github.com/wch2019/DotWallpaper";
+
+function openGitHub() {
+  openUrl(GITHUB_URL);
+}
 </script>
 
 <template>
@@ -54,12 +61,32 @@ async function handleCheckUpdate() {
         </div>
       </div>
 
+      <!-- 项目主页 -->
+      <button
+        class="flex w-full cursor-pointer items-center gap-3 rounded-lg bg-panel-2 px-4 py-4 text-left transition-colors hover:opacity-85"
+        @click="openGitHub"
+      >
+        <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent">
+          <Github :size="20" />
+        </div>
+        <div class="min-w-0 flex-1">
+          <div class="text-[12px] font-medium text-tx">项目主页</div>
+          <p class="mt-0.5 text-[11px] text-faint">在 GitHub 查看源码、提交反馈，获取最新动态。</p>
+        </div>
+        <ArrowRight :size="14" class="shrink-0 text-faint" />
+      </button>
+
       <!-- 检查更新 -->
-      <div v-if="!isStoreBuild" class="upd-card-panel rounded-lg bg-panel-2 px-4 py-4">
-        <div class="flex items-center gap-2">
-          <RefreshCw :size="13" class="shrink-0 text-accent" />
-          <span class="text-[12px] font-medium text-tx">更新检查</span>
-          <span class="ml-auto">
+      <div v-if="!isStoreBuild" class="rounded-lg bg-panel-2 px-4 py-4">
+        <div class="flex items-center gap-3">
+          <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent">
+            <RefreshCw :size="20" />
+          </div>
+          <div class="min-w-0 flex-1">
+            <div class="text-[12px] font-medium text-tx">更新检查</div>
+            <p class="mt-0.5 text-[11px] text-faint">检查 DotWallpaper 是否有新版本可用。</p>
+          </div>
+          <span class="shrink-0">
             <NButton
               size="small"
               secondary
@@ -98,26 +125,13 @@ async function handleCheckUpdate() {
           </button>
         </div>
 
-        <!-- 无更新 -->
-        <p
-          v-else-if="updaterStore.checked && !updaterStore.error"
-          class="mt-2.5 text-[11px] text-faint"
-        >
-          当前已是最新版本，应用启动后会自动检查更新。
-        </p>
-
-        <!-- 检查失败 -->
+        <!-- 检查失败（成功时已有 toast 轻提示，不再常驻占用空间） -->
         <p
           v-else-if="updaterStore.checked && updaterStore.error"
           class="mt-2.5 text-[11px]"
           style="color: #f0ad4e"
         >
           检查更新失败：{{ errText(updaterStore.error) }}
-        </p>
-
-        <!-- 默认提示 -->
-        <p v-else class="mt-2.5 text-[11px] text-faint">
-          点击右侧按钮检查 DotWallpaper 是否有新版本可用。
         </p>
       </div>
 
