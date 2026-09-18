@@ -1,107 +1,46 @@
-// DotWallpaper 壁纸工具 - Pinia 状态仓库（替代原 useWallpaper.ts 模块级 ref）
+// DotWallpaper 壁纸工具 - Pinia 状态仓库（主入口；类型/常量/工具/效果/来源/收藏已拆分至 wallpaper/ 子模块）
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { confirmDanger, toast } from "../lib/naive-host";
+import { useEffectState } from "./wallpaper/effect";
+import { useSourceState } from "./wallpaper/sources";
+import { useFavoritesState } from "./wallpaper/favorites";
+import { baseName } from "./wallpaper/utils";
+import {
+  DIR_STORAGE_KEY,
+  PAGE_SIZE,
+  type WallpaperEntryData,
+  type ThumbnailUpdatedPayload,
+  type WallpaperItem,
+  type WallpaperKind,
+  type WallpaperSource,
+} from "./wallpaper/types";
 
-// ---------- 类型 ----------
-export type WallpaperKind = "local" | "current";
-
-/// 壁纸来源选项卡：local = 本地壁纸（可增删），system = Windows 自带系统壁纸（只读），
-/// favorites = 收藏夹（书签视图：跨本地/系统来源，仅标记不删文件）
-export type WallpaperSource = "local" | "system" | "favorites";
-
-/// 各来源选项卡的可见性：local 默认强制开启、不可关闭
-export const SOURCE_VIS_KEY = "dot-wallpaper-source-visibility";
-export type SourceVisibility = { local: true; system: boolean; favorites: boolean };
-// 选项卡展示顺序（独立于可见性：顺序控制渲染次序，可见性控制是否显示）
-export const SOURCE_ORDER_KEY = "dot-wallpaper-source-order";
-export const SOURCE_ORDER_DEFAULT: WallpaperSource[] = ["local", "favorites", "system"];
-
-export interface WallpaperItem {
-  key: string;
-  kind: WallpaperKind; // 类型：本地 / 当前壁纸（右键目标）
-  path?: string; // 本地绝对路径（原图）
-  title?: string;
-  thumb?: string; // 缩略图绝对路径（列表加载用；无缩略图时为空）
-  applying?: boolean; // 是否正在设置中
-}
-
-/// 后端列表命令返回条目：原图路径 + 缩略图路径（可能为空）
-interface WallpaperEntryData {
-  path: string;
-  thumb: string;
-}
-
-/// 后端后台缩略图完成事件 payload：原图路径 + 缩略图路径
-interface ThumbnailUpdatedPayload {
-  path: string;
-  thumb: string;
-}
-
-// ---------- 常量 ----------
-export const DIR_STORAGE_KEY = "dot-wallpaper-dir"; // localStorage 持久化键
-export const FAVORITES_KEY = "dot-wallpaper-favorites"; // localStorage 收藏书签集合键
-export const EFFECT_STORAGE_KEY = "dot-wallpaper-effect"; // localStorage 壁纸效果键
-export const PAGE_SIZE = 12; // 每页加载张数
-
-/// 壁纸模糊遮罩效果参数（与后端 wallpaper::WallpaperEffect 对齐）
-export interface WallpaperEffect {
-  enabled: boolean; // 是否启用效果
-  blur: number; // 高斯模糊强度（0~30）
-  opacity: number; // 遮罩不透明度百分比（0~80）
-  color: string; // 遮罩颜色 #RRGGBB（默认黑色 #000000）
-}
-
-const DEFAULT_EFFECT: WallpaperEffect = {
-  enabled: false,
-  blur: 12,
-  opacity: 40,
-  color: "#000000",
-};
-
-// 校验 #RRGGBB（前端兜底，非法回退默认）
-function normalizeEffectColor(c: string): string {
-  return /^#[0-9a-fA-F]{6}$/.test(c) ? c.toLowerCase() : DEFAULT_EFFECT.color;
-}
+// 类型、常量与纯工具函数从子模块统一再导出，调用方 import 路径保持不变
+export * from "./wallpaper/types";
+export * from "./wallpaper/utils";
+export * from "./wallpaper/effect";
 
 // 后台缩略图事件监听全局只注册一次（应用单页生命周期内复用）
 let thumbnailListenerRegistered = false;
 
-// ---------- 纯工具函数 ----------
-export function shuffle<T>(arr: T[]): T[] {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
-
-export function baseName(path: string): string {
-  const parts = path.split(/[\\/]/);
-  return parts[parts.length - 1];
-}
-
-// 图片能用于展示的地址：本地路径走 convertFileSrc
-export function displaySrc(item: WallpaperItem): string {
-  return item.path ? convertFileSrc(item.path) : "";
-}
-
-// 列表缩略图 URL：基于后端生成的缩略图缓存路径（无缩略图时返回空串，
-// 由调用方显示占位；不回退原图，保证大图不进入列表加载链路）
-export function thumbSrc(item: WallpaperItem): string {
-  return item.thumb ? convertFileSrc(item.thumb) : "";
-}
-
-// 徽标文案（当前仅本地）
-export function kindBadgeText(kind: WallpaperKind): string {
-  return kind === "local" ? "本地" : "";
-}
-
 // ---------- Pinia Store ----------
 export const useWallpaperStore = defineStore("wallpaper", () => {
+  // ---- 组合式子模块状态 ----
+  const { wallpaperEffect, setEffect } = useEffectState();
+  const {
+    sourceVisibility,
+    sourceOrder,
+    updateSourceVisibility,
+    persistSourceVisibility,
+    moveSourceOrder,
+    moveSourceOrderTo,
+  } = useSourceState();
+  const { favorites, loadFavorites, isFavorite, addFavorite, removeFavorite } =
+    useFavoritesState();
+
   // ---- 状态 ----
   const source = ref<WallpaperSource>("local"); // 当前选项卡来源
   const currentDir = ref(""); // 自定义壁纸目录（空 = 预设目录）
@@ -112,131 +51,6 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
   const isApplying = ref(false); // 应用壁纸 loading
   const loadingMore = ref(false);
   const allCount = ref(0);
-  const favorites = ref<Set<string>>(new Set()); // 收藏壁纸路径集合（localStorage 持久化）
-
-  // 壁纸模糊遮罩效果（localStorage 持久化；预览与设为壁纸共用）
-  const wallpaperEffect = ref<WallpaperEffect>({ ...DEFAULT_EFFECT });
-  restoreEffect();
-
-  function restoreEffect() {
-    try {
-      const raw = localStorage.getItem(EFFECT_STORAGE_KEY);
-      if (raw) {
-        const p = JSON.parse(raw) as Partial<WallpaperEffect>;
-        wallpaperEffect.value = {
-          enabled: Boolean(p.enabled),
-          blur: Math.min(30, Math.max(0, Number(p.blur) || 0)),
-          opacity: Math.min(80, Math.max(0, Number(p.opacity) || 0)),
-          color: normalizeEffectColor(
-            typeof p.color === "string" ? p.color : DEFAULT_EFFECT.color
-          ),
-        };
-      }
-    } catch { /* ignore */ }
-  }
-
-  function persistEffect() {
-    try {
-      localStorage.setItem(EFFECT_STORAGE_KEY, JSON.stringify(wallpaperEffect.value));
-    } catch { /* ignore */ }
-  }
-
-  // 更新效果参数并立即持久化（EffectPanel 滑块/开关调用）
-  function setEffect(patch: Partial<WallpaperEffect>) {
-    const next = { ...wallpaperEffect.value, ...patch };
-    if (typeof next.color === "string") next.color = normalizeEffectColor(next.color);
-    wallpaperEffect.value = next;
-    persistEffect();
-  }
-
-  // 各来源选项卡的可见性：local 默认 true、不可关闭；system 默认 false（可在设置开启）；favorites 默认 true
-  const sourceVisibility = ref<SourceVisibility>({ local: true, system: false, favorites: true });
-  restoreSourceVisibility();
-
-  function restoreSourceVisibility() {
-    try {
-      const raw = localStorage.getItem(SOURCE_VIS_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as Partial<SourceVisibility>;
-        sourceVisibility.value.system = parsed.system ?? false;
-        sourceVisibility.value.favorites = parsed.favorites ?? true;
-      }
-    } catch { /* ignore */ }
-  }
-
-  function persistSourceVisibility() {
-    try {
-      localStorage.setItem(SOURCE_VIS_KEY, JSON.stringify({
-        system: sourceVisibility.value.system,
-        favorites: sourceVisibility.value.favorites,
-      }));
-    } catch { /* ignore */ }
-  }
-
-  function setSourceVisibility(key: "system" | "favorites", visible: boolean) {
-    sourceVisibility.value[key] = visible;
-    persistSourceVisibility();
-    // 当前正停留在被隐藏的选项卡时自动切回本地，避免留下不可达空栏
-    if (!visible && source.value === key) {
-      void setSource("local");
-    }
-  }
-
-  // ---- 选项卡展示顺序（持久化；local 恒可见但仍可参与排序） ----
-  const sourceOrder = ref<WallpaperSource[]>([...SOURCE_ORDER_DEFAULT]);
-  restoreSourceOrder();
-
-  function restoreSourceOrder() {
-    try {
-      const raw = localStorage.getItem(SOURCE_ORDER_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as unknown;
-      if (!Array.isArray(parsed)) return;
-      const list = parsed.filter(
-        (s): s is WallpaperSource =>
-          s === "local" || s === "system" || s === "favorites"
-      );
-      // 去重并补全缺失来源，保证数组恰好包含全部三个来源
-      const seen = new Set<WallpaperSource>(list);
-      for (const s of SOURCE_ORDER_DEFAULT) {
-        if (!seen.has(s)) {
-          list.push(s);
-          seen.add(s);
-        }
-      }
-      sourceOrder.value = list;
-    } catch { /* ignore */ }
-  }
-
-  function persistSourceOrder() {
-    try {
-      localStorage.setItem(SOURCE_ORDER_KEY, JSON.stringify(sourceOrder.value));
-    } catch { /* ignore */ }
-  }
-
-  // 将指定来源在展示顺序中上移 / 下移（dir: -1 上移，1 下移）
-  function moveSourceOrder(key: WallpaperSource, dir: -1 | 1) {
-    const idx = sourceOrder.value.indexOf(key);
-    const target = idx + dir;
-    if (idx < 0 || target < 0 || target >= sourceOrder.value.length) return;
-    const next = [...sourceOrder.value];
-    [next[idx], next[target]] = [next[target], next[idx]];
-    sourceOrder.value = next;
-    persistSourceOrder();
-  }
-
-  // 拖拽排序：将指定来源移动到目标来源所在的槽位（就地替换式插入）
-  function moveSourceOrderTo(key: WallpaperSource, targetKey: WallpaperSource) {
-    const from = sourceOrder.value.indexOf(key);
-    const to = sourceOrder.value.indexOf(targetKey);
-    if (from < 0 || to < 0 || from === to) return;
-    const next = [...sourceOrder.value];
-    next.splice(from, 1);
-    const insertAt = next.indexOf(targetKey) + (from < to ? 1 : 0);
-    next.splice(insertAt, 0, key);
-    sourceOrder.value = next;
-    persistSourceOrder();
-  }
 
   // 右键菜单状态
   const ctxVisible = ref(false);
@@ -307,6 +121,15 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
     hasMore.value = false;
     allCount.value = 0;
     await loadWallpapers();
+  }
+
+  // 设置来源可见性：仅负责"隐藏当前选项卡时自动切回本地"的联动，
+  // 可见性更新与持久化由 useSourceState.updateSourceVisibility 完成
+  function setSourceVisibility(key: "system" | "favorites", visible: boolean) {
+    updateSourceVisibility(key, visible);
+    if (!visible && source.value === key) {
+      void setSource("local");
+    }
   }
 
   // ---- 设置壁纸（核心） ----
@@ -512,31 +335,7 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
     }
   }
 
-  // ---- 收藏夹（书签标记：纯前端 localStorage 持久化，后端零改动） ----
-  function loadFavorites() {
-    try {
-      const raw = localStorage.getItem(FAVORITES_KEY);
-      const arr: unknown = raw ? JSON.parse(raw) : [];
-      favorites.value = new Set(
-        Array.isArray(arr) ? arr.filter((x): x is string => typeof x === "string") : []
-      );
-    } catch {
-      favorites.value = new Set();
-    }
-  }
-
-  function persistFavorites() {
-    try {
-      localStorage.setItem(FAVORITES_KEY, JSON.stringify([...favorites.value]));
-    } catch {
-      /* ignore */
-    }
-  }
-
-  function isFavorite(path: string | undefined | null): boolean {
-    return !!path && favorites.value.has(path);
-  }
-
+  // ---- 收藏夹 ----
   // 收藏页数据：直接按收藏路径向后端查询，不经过当前壁纸目录，
   // 因此切换壁纸目录后收藏依然完整；已被外部删除的失效路径由后端过滤不展示
   async function loadFavoriteEntries(): Promise<WallpaperEntryData[]> {
@@ -559,10 +358,9 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
   // 增删收藏书签；返回是否已收藏（true = 刚加入）
   function toggleFavorite(path: string | undefined | null): boolean {
     if (!path) return false;
-    const had = favorites.value.has(path);
-    if (had) favorites.value.delete(path);
-    else favorites.value.add(path);
-    persistFavorites();
+    const had = isFavorite(path);
+    if (had) removeFavorite(path);
+    else addFavorite(path);
 
     // 在收藏夹页取消收藏：立即移除卡片并清空对应预览，避免幽灵项
     if (had && source.value === "favorites") {
@@ -654,7 +452,7 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
     try {
       await invoke("delete_wallpaper", { path: item.path });
       // 文件已物理删除：同步清理收藏书签，避免收藏夹出现失效路径
-      if (favorites.value.delete(item.path)) persistFavorites();
+      if (isFavorite(item.path)) removeFavorite(item.path);
       toast("已删除壁纸：" + name, "success");
       await loadWallpapers();
       // 删除的正是当前桌面壁纸：同步刷新桌面真值
@@ -714,7 +512,7 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
     setSourceVisibility,
     persistSourceVisibility,
     setEffect,
-   moveSourceOrder,
+    moveSourceOrder,
     moveSourceOrderTo,
- };
+  };
 });

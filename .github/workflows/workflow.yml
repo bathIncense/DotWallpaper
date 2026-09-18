@@ -68,6 +68,7 @@ jobs:
             
             ### 🎨 优化 
             - 优化去掉预览遮罩
+            - 性能优化
 
           releaseDraft: false
           prerelease: false
