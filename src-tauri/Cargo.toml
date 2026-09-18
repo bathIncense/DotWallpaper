@@ -16,6 +16,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # 缩略图生成（解码 jpg/png/bmp/webp，编码 webp/jpeg）
+# 壁纸效果合成（模糊/裁剪/遮罩）直接使用 imageops::blur / resize / crop，无需额外 feature
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "bmp", "webp"] }
 
 # Windows Win32 API（设置桌面壁纸使用 SystemParametersInfoW）

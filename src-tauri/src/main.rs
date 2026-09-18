@@ -96,6 +96,39 @@ async fn set_wallpaper(
     Ok(SetWallpaperResult { path })
 }
 
+/// 按模糊遮罩效果合成为壁纸并设为桌面壁纸。
+///
+/// 流程：合成图写入缓存 → 写入壁纸样式注册表 → SystemParametersInfoW 设置合成图。
+/// 返回原图路径（当前壁纸状态仍以原图身份展示，右键再设壁纸时重新走合成）。
+#[tauri::command]
+async fn apply_wallpaper_effect(
+    path: String,
+    style: u32,
+    tile: bool,
+    effect: wallpaper::WallpaperEffect,
+    app: tauri::AppHandle,
+) -> Result<SetWallpaperResult, String> {
+    let compose_path = path.clone();
+    let composed = tauri::async_runtime::spawn_blocking(move || {
+        wallpaper::compose_wallpaper_effect(&app, &compose_path, effect)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    // 写样式注册表 + 设壁纸同样在 blocking 线程中完成
+    let set_path = composed;
+    let res: Result<(), String> =
+        tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+            wallpaper::set_desktop_wallpaper_style(style, tile)?;
+            wallpaper::set_wallpaper_win32(&set_path)
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+    res?;
+
+    Ok(SetWallpaperResult { path })
+}
+
 /// 获取当前桌面壁纸路径
 #[tauri::command]
 async fn get_current_wallpaper() -> Result<String, String> {
@@ -314,6 +347,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             set_wallpaper,
+            apply_wallpaper_effect,
             get_current_wallpaper,
             list_local_wallpapers,
             list_system_wallpapers,

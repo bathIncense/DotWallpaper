@@ -6,8 +6,8 @@
 //   - 点击"设为壁纸"才真正写入桌面（绿框 currentWallpaper 随之更新）
 //   - 预览样式下拉可即时预览；设为壁纸时若与系统样式不同会同步写注册表
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { NButton, NIcon, NSelect } from "naive-ui";
-import { Check, ChevronLeft, ChevronRight, LayoutGrid, Maximize, Star, X } from "lucide-vue-next";
+import { NButton, NColorPicker, NIcon, NSelect, NSlider, NSwitch } from "naive-ui";
+import { Check, ChevronLeft, ChevronRight, LayoutGrid, Maximize, Sparkles, Star, X } from "lucide-vue-next";
 import {
   baseName,
   displaySrc,
@@ -261,6 +261,33 @@ function getTransitionBg(style: { style: number; tile: boolean }, src: string): 
   return { ...bg, opacity: animOpacity.value.toString() };
 }
 
+// ---------- 壁纸模糊遮罩效果（预览实时联动设置面板） ----------
+// 预览层与放大层都叠加与后端合成一致的 filter + 黑色遮罩，滑块即改即看
+const effectEnabled = computed(() => store.wallpaperEffect.enabled);
+const effectBlur = computed(() => store.wallpaperEffect.blur);
+const effectOpacity = computed(() => store.wallpaperEffect.opacity);
+const effectColor = computed(() => store.wallpaperEffect.color);
+
+function withEffect(base: Record<string, string>): Record<string, string> {
+  if (!effectEnabled.value) return base;
+  const s: Record<string, string> = { ...base };
+  if (effectBlur.value > 0) s.filter = `blur(${effectBlur.value}px)`;
+  return s;
+}
+
+// 前端预览近似后端逐像素混合：rgba(r,g,b,a) 与 (out*keep + c*a)/255 视觉等价
+const effectMaskStyle = computed(() => {
+  if (!effectEnabled.value || effectOpacity.value <= 0) {
+    return { display: "none" };
+  }
+  const hex = effectColor.value.replace("#", "");
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+  const alpha = (effectOpacity.value / 100).toFixed(3);
+  return { backgroundColor: `rgba(${r}, ${g}, ${b}, ${alpha})` };
+});
+
 // ---------- 键盘快捷键：← → 切换壁纸 ----------
 function onKey(e: KeyboardEvent) {
   if (e.key === "ArrowLeft") quickSwitch("left");
@@ -444,8 +471,10 @@ onUnmounted(() => {
 
       <!-- 模拟屏 -->
       <div v-else-if="monitorSize" class="mock-screen" :style="mockScreenStyle">
-        <!-- 壁纸层 -->
-        <div class="mock-wall" :style="getTransitionBg(selectedStyle, previewSrc)"></div>
+        <!-- 壁纸层（启用效果时叠加高斯模糊） -->
+        <div class="mock-wall" :style="withEffect(getTransitionBg(selectedStyle, previewSrc))"></div>
+        <!-- 壁纸效果遮罩层（仅预览：模拟后端合成的黑色半透明叠加） -->
+        <div v-if="effectEnabled" class="effect-mask" :style="effectMaskStyle"></div>
 
         <!-- 快速切换按钮 -->
         <button class="switch-btn switch-left" title="上一张 (←)" @click="quickSwitch('left')">
@@ -501,6 +530,61 @@ onUnmounted(() => {
         设为壁纸
       </NButton>
 
+      <!-- 壁纸效果设置：开关 + 启用后展开滑块（与预览实时联动） -->
+      <div class="effect-settings border-t border-line/80 pt-2">
+        <div class="flex items-center justify-between">
+          <span class="flex items-center gap-1.5 text-[10.5px] text-faint">
+            <NIcon :component="Sparkles" :size="12" class="text-accent" />
+            壁纸效果
+          </span>
+          <n-switch
+            :value="effectEnabled"
+            size="small"
+            @update:value="(v: boolean) => store.setEffect({ enabled: v })"
+          />
+        </div>
+        <div v-if="effectEnabled" class="mt-2 flex flex-col gap-2">
+          <div class="fx-field">
+            <div class="flex items-center justify-between">
+              <span class="text-[10.5px] text-dim">模糊强度</span>
+              <span class="fx-value font-mono text-[10px] text-accent">{{ effectBlur }}px</span>
+            </div>
+            <n-slider
+              :value="effectBlur"
+              :min="0"
+              :max="30"
+              :step="1"
+              size="small"
+              @update:value="(v: number) => store.setEffect({ blur: v })"
+            />
+          </div>
+          <div class="fx-field">
+            <div class="flex items-center justify-between">
+              <span class="text-[10.5px] text-dim">遮罩不透明度</span>
+              <span class="fx-value font-mono text-[10px] text-accent">{{ effectOpacity }}%</span>
+            </div>
+            <n-slider
+              :value="effectOpacity"
+              :min="0"
+              :max="80"
+              :step="1"
+              size="small"
+              @update:value="(v: number) => store.setEffect({ opacity: v })"
+            />
+          </div>
+          <div class="fx-field flex items-center justify-between">
+            <span class="text-[10.5px] text-dim">遮罩颜色</span>
+            <n-color-picker
+              :value="effectColor"
+              :show-alpha="false"
+              size="small"
+              style="width: 100px"
+              @update:value="(v: string) => store.setEffect({ color: v })"
+            />
+          </div>
+        </div>
+      </div>
+
       <!-- 状态行 -->
       <div class="status-row flex items-center gap-4 border-t border-line/80 pt-2">
         <span class="flex min-w-0 items-center gap-1.5 text-[10.5px]">
@@ -538,7 +622,9 @@ onUnmounted(() => {
         @click.self="closeZoom"
       >
         <!-- 壁纸背景层：独立承载背景图，切换时通过 animOpacity 淡入淡出 -->
-        <div class="zoom-bg" :style="getTransitionBg(selectedStyle, previewSrc)"></div>
+        <div class="zoom-bg" :style="withEffect(getTransitionBg(selectedStyle, previewSrc))"></div>
+        <!-- 壁纸效果遮罩层（放大态同样叠加） -->
+        <div v-if="effectEnabled" class="zoom-effect-mask" :style="effectMaskStyle"></div>
         <button
           class="zoom-close absolute right-4 top-4 z-10 flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-black/50 text-white/90 transition-colors hover:bg-black/70"
           title="关闭（Esc）"
@@ -602,6 +688,14 @@ onUnmounted(() => {
   inset: 0;
   background-position: center center;
   transition: opacity 0.28s ease;
+}
+
+/* 壁纸效果遮罩层：模拟后端合成的黑色半透明叠加（仅预览，不拦截点击） */
+.effect-mask,
+.zoom-effect-mask {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
 }
 
 /* 模拟任务栏：半透明深色，覆盖屏幕底部 */

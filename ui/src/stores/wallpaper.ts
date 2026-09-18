@@ -43,7 +43,28 @@ interface ThumbnailUpdatedPayload {
 // ---------- 常量 ----------
 export const DIR_STORAGE_KEY = "dot-wallpaper-dir"; // localStorage 持久化键
 export const FAVORITES_KEY = "dot-wallpaper-favorites"; // localStorage 收藏书签集合键
+export const EFFECT_STORAGE_KEY = "dot-wallpaper-effect"; // localStorage 壁纸效果键
 export const PAGE_SIZE = 12; // 每页加载张数
+
+/// 壁纸模糊遮罩效果参数（与后端 wallpaper::WallpaperEffect 对齐）
+export interface WallpaperEffect {
+  enabled: boolean; // 是否启用效果
+  blur: number; // 高斯模糊强度（0~30）
+  opacity: number; // 遮罩不透明度百分比（0~80）
+  color: string; // 遮罩颜色 #RRGGBB（默认黑色 #000000）
+}
+
+const DEFAULT_EFFECT: WallpaperEffect = {
+  enabled: false,
+  blur: 12,
+  opacity: 40,
+  color: "#000000",
+};
+
+// 校验 #RRGGBB（前端兜底，非法回退默认）
+function normalizeEffectColor(c: string): string {
+  return /^#[0-9a-fA-F]{6}$/.test(c) ? c.toLowerCase() : DEFAULT_EFFECT.color;
+}
 
 // 后台缩略图事件监听全局只注册一次（应用单页生命周期内复用）
 let thumbnailListenerRegistered = false;
@@ -92,6 +113,41 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
   const loadingMore = ref(false);
   const allCount = ref(0);
   const favorites = ref<Set<string>>(new Set()); // 收藏壁纸路径集合（localStorage 持久化）
+
+  // 壁纸模糊遮罩效果（localStorage 持久化；预览与设为壁纸共用）
+  const wallpaperEffect = ref<WallpaperEffect>({ ...DEFAULT_EFFECT });
+  restoreEffect();
+
+  function restoreEffect() {
+    try {
+      const raw = localStorage.getItem(EFFECT_STORAGE_KEY);
+      if (raw) {
+        const p = JSON.parse(raw) as Partial<WallpaperEffect>;
+        wallpaperEffect.value = {
+          enabled: Boolean(p.enabled),
+          blur: Math.min(30, Math.max(0, Number(p.blur) || 0)),
+          opacity: Math.min(80, Math.max(0, Number(p.opacity) || 0)),
+          color: normalizeEffectColor(
+            typeof p.color === "string" ? p.color : DEFAULT_EFFECT.color
+          ),
+        };
+      }
+    } catch { /* ignore */ }
+  }
+
+  function persistEffect() {
+    try {
+      localStorage.setItem(EFFECT_STORAGE_KEY, JSON.stringify(wallpaperEffect.value));
+    } catch { /* ignore */ }
+  }
+
+  // 更新效果参数并立即持久化（EffectPanel 滑块/开关调用）
+  function setEffect(patch: Partial<WallpaperEffect>) {
+    const next = { ...wallpaperEffect.value, ...patch };
+    if (typeof next.color === "string") next.color = normalizeEffectColor(next.color);
+    wallpaperEffect.value = next;
+    persistEffect();
+  }
 
   // 各来源选项卡的可见性：local 默认 true、不可关闭；system 默认 false（可在设置开启）；favorites 默认 true
   const sourceVisibility = ref<SourceVisibility>({ local: true, system: false, favorites: true });
@@ -301,6 +357,30 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
     }
     isApplying.value = true;
     try {
+      // 启用模糊遮罩效果时：后端合成（模糊+遮罩）后设置，样式注册表一并写入
+      if (wallpaperEffect.value.enabled) {
+        const styleToApply = style ?? desktopStyle.value ?? { style: 10, tile: false };
+        const result = (await invoke("apply_wallpaper_effect", {
+          path,
+          style: styleToApply.style,
+          tile: styleToApply.tile,
+          effect: {
+            enabled: true,
+            blur: wallpaperEffect.value.blur,
+            opacity: wallpaperEffect.value.opacity,
+            color: wallpaperEffect.value.color,
+          },
+        })) as { path: string };
+        desktopStyle.value = { ...styleToApply };
+        currentWallpaper.value = {
+          key: "current_" + (result.path || ""),
+          kind: "local",
+          path: result.path,
+        };
+        toast("壁纸设置成功", "success");
+        return true;
+      }
+
       if (
         style &&
         desktopStyle.value &&
@@ -601,6 +681,7 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
     isApplying,
     loadingMore,
     allCount,
+    wallpaperEffect,
     ctxVisible,
     ctxX,
     ctxY,
@@ -632,6 +713,7 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
     removeWallpaper,
     setSourceVisibility,
     persistSourceVisibility,
+    setEffect,
    moveSourceOrder,
     moveSourceOrderTo,
  };

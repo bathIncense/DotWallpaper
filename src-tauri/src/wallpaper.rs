@@ -404,3 +404,143 @@ pub fn delete_wallpaper_file(path: &str) -> Result<(), String> {
     std::fs::remove_file(&p).map_err(|e| format!("删除失败：{e}"))?;
     Ok(())
 }
+
+// ============================================================================
+// 壁纸模糊遮罩效果（MVP）
+// ============================================================================
+
+/// 壁纸模糊遮罩效果参数（预览与设为壁纸共用）
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct WallpaperEffect {
+    /// 是否启用效果
+    pub enabled: bool,
+    /// 高斯模糊强度（sigma，0~30）
+    pub blur: u32,
+    /// 遮罩不透明度（百分比，0~80）
+    pub opacity: u32,
+    /// 遮罩颜色（十六进制 #RRGGBB，默认黑色）
+    pub color: String,
+}
+
+/// 解析 #RRGGBB 颜色字符串，非法时回退黑色
+fn parse_hex_color(s: &str) -> [u8; 3] {
+    let t = s.trim().trim_start_matches('#');
+    if t.len() == 6 {
+        if let (Ok(r), Ok(g), Ok(b)) = (
+            u8::from_str_radix(&t[0..2], 16),
+            u8::from_str_radix(&t[2..4], 16),
+            u8::from_str_radix(&t[4..6], 16),
+        ) {
+            return [r, g, b];
+        }
+    }
+    [0, 0, 0]
+}
+
+/// FNV-1a 64 位稳定哈希（用于效果缓存文件名；进程间稳定，不随随机种子变化）
+fn fnv1a64(data: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in data {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+/// 将原图按主屏尺寸合成为"模糊 + 遮罩"壁纸图，返回合成图路径。
+///
+/// 处理流程（不修改原图）：
+/// 1. 解码原图（jpg/png/bmp/webp）
+/// 2. 按主屏物理分辨率等比裁剪填充（覆盖全屏，与"填充"样式一致）
+/// 3. 高斯模糊（blur=0 时跳过）
+/// 4. 叠加半透明遮罩（opacity=0 时跳过，颜色取 effect.color）
+/// 5. JPEG 编码写入 app_cache_dir/effects/，同参数幂等复用，返回绝对路径
+pub fn compose_wallpaper_effect(
+    app: &tauri::AppHandle,
+    path: &str,
+    effect: WallpaperEffect,
+) -> Result<String, String> {
+    use tauri::Manager;
+
+    // 1. 解码原图
+    let img = image::open(path).map_err(|e| format!("读取壁纸失败：{e}"))?;
+    let img = img.to_rgba8();
+    if img.width() == 0 || img.height() == 0 {
+        return Err("壁纸尺寸异常".into());
+    }
+
+    // 2. 主屏物理分辨率（封顶 3840 长边，避免超大屏/高 DPI 合成过慢）
+    let mon = app
+        .primary_monitor()
+        .map_err(|e| format!("读取屏幕信息失败：{e}"))?
+        .ok_or_else(|| "未检测到显示器".to_string())?;
+    let size = mon.size();
+    let mut tw = size.width;
+    let mut th = size.height;
+    let longest = tw.max(th);
+    if longest > 3840 {
+        let k = 3840.0 / longest as f32;
+        tw = (tw as f32 * k).round() as u32;
+        th = (th as f32 * k).round() as u32;
+    }
+    if tw == 0 || th == 0 {
+        return Err("屏幕分辨率异常".into());
+    }
+
+    // 等比放大覆盖 + 居中裁剪（fill 语义）
+    let scale = (tw as f32 / img.width() as f32).max(th as f32 / img.height() as f32);
+    let nw = (img.width() as f32 * scale).round() as u32;
+    let nh = (img.height() as f32 * scale).round() as u32;
+    let resized = image::imageops::resize(&img, nw, nh, image::imageops::FilterType::Triangle);
+    let x = (nw - tw) / 2;
+    let y = (nh - th) / 2;
+    let cropped = image::imageops::crop_imm(&resized, x, y, tw, th).to_image();
+
+    // 3. 高斯模糊
+    let mut out = if effect.blur > 0 {
+        image::imageops::blur(&cropped, effect.blur.min(30) as f32)
+    } else {
+        cropped
+    };
+
+    // 4. 遮罩叠加（逐像素混合，等价于 color alpha 混合）
+    if effect.opacity > 0 {
+        let [cr, cg, cb] = parse_hex_color(&effect.color);
+        let a = (effect.opacity.min(80).min(100) * 255 / 100) as u32;
+        let keep = 255u32 - a;
+        for p in out.pixels_mut() {
+            p[0] = ((p[0] as u32 * keep + cr as u32 * a) / 255) as u8;
+            p[1] = ((p[1] as u32 * keep + cg as u32 * a) / 255) as u8;
+            p[2] = ((p[2] as u32 * keep + cb as u32 * a) / 255) as u8;
+            p[3] = 255;
+        }
+    }
+
+    // 5. 写缓存（幂等复用）
+    let cache = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("读取缓存目录失败：{e}"))?
+        .join("effects");
+    std::fs::create_dir_all(&cache).map_err(|e| format!("创建效果缓存目录失败：{e}"))?;
+    let hash = fnv1a64(path.as_bytes());
+    let color_tag = effect.color.trim().trim_start_matches('#').to_ascii_lowercase();
+    let name = format!("effect_{hash:x}_{}_{}_{}.jpg", effect.blur, effect.opacity, color_tag);
+    let out_path = cache.join(&name);
+
+    if !out_path.exists() {
+        let rgb = image::DynamicImage::ImageRgba8(out).to_rgb8();
+        let file = std::fs::File::create(&out_path)
+            .map_err(|e| format!("创建效果缓存文件失败：{e}"))?;
+        let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(file, 90);
+        enc.encode(
+            &rgb,
+            tw,
+            th,
+            image::ExtendedColorType::Rgb8,
+        )
+        .map_err(|e| format!("合成壁纸编码失败：{e}"))?;
+    }
+
+    Ok(out_path.to_string_lossy().replace('/', "\\"))
+}
