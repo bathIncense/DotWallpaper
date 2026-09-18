@@ -4,6 +4,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod bing;
 mod thumbs;
 mod wallpaper;
 
@@ -222,6 +223,68 @@ async fn list_wallpapers_by_paths(
     .map_err(|e| e.to_string())?
 }
 
+/// 拉取必应每日壁纸列表（在线数据，仅返回标题/日期/远程 URL，不下载原图）
+///
+/// 前端直接用返回的 url（原图）/ thumb（400x240 小图）作为图片地址展示，
+/// 只有"设为壁纸"时才调用 download_bing_wallpaper 下载到本地。
+#[tauri::command]
+async fn list_bing_wallpapers() -> Result<Vec<bing::BingWallpaper>, String> {
+    // 网络请求为阻塞 IO，放入 blocking 线程避免卡住主线程
+    tauri::async_runtime::spawn_blocking(bing::fetch_wallpapers)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// 下载必应壁纸原图到本地缓存目录，返回本地绝对路径
+///
+/// 下载目录由前端传入（前端 localStorage 持久化，键 `dot-wallpaper-bing-dir`），
+/// 未传或为空时退回默认 `图片目录\\BingWallpaper`。同名文件已存在时直接复用。
+#[tauri::command]
+async fn download_bing_wallpaper(
+    url: String,
+    date: String,
+    dir: Option<String>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    let dir = dir
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| bing::default_bing_dir().ok())
+        .ok_or_else(|| "无法确定必应壁纸下载目录".to_string())?;
+    let dir_path = PathBuf::from(dir);
+    ensure_asset_scope(&app, &dir_path);
+    tauri::async_runtime::spawn_blocking(move || bing::download_wallpaper(&url, &date, &dir_path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// 弹出文件对话框选择必应壁纸下载目录，仅返回所选路径（持久化由前端 localStorage 负责）
+///
+/// 返回 `Ok(None)` 表示用户取消。注意：必须保持为同步命令 —— blocking_pick_folder
+/// 会阻塞当前线程等待主线程事件循环返回对话框结果，放在 async 命令里会阻塞异步运行时。
+#[tauri::command]
+fn pick_bing_wallpaper_directory(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    // 拿不到已配置目录时退回默认目录；默认目录不存在则先建出来，
+    // 否则对话框的初始定位会失效
+    let default_dir = bing::default_bing_dir()
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_default();
+    if !default_dir.is_empty() {
+        let _ = std::fs::create_dir_all(&default_dir);
+    }
+
+    let mut builder = app.dialog().file().set_title("选择必应壁纸下载目录");
+    if !default_dir.is_empty() {
+        builder = builder.set_directory(&PathBuf::from(&default_dir));
+    }
+    let res = builder.blocking_pick_folder();
+
+    // FilePath → 字符串：Windows 下统一为反斜杠（不转义，避免出现 "\\\\"）
+    Ok(res.map(|path| path.to_string().replace('/', "\\")))
+}
+
 /// 在系统资源管理器中定位文件/目录（右键"跳转到当前文件目录"）
 ///
 /// 文件使用 explorer /select 打开所在目录并选中该项；目录则直接打开。
@@ -316,7 +379,7 @@ fn copy_dropped_files(paths: &[String], save_dir: &std::path::Path) -> Result<(V
 }
 
 /// 解析下载保存目录：优先用户指定目录，否则使用用户图片目录
-fn resolve_save_dir(dir: Option<String>) -> PathBuf {
+pub(crate) fn resolve_save_dir(dir: Option<String>) -> PathBuf {
     if let Some(d) = dir {
         let t = d.trim();
         if !t.is_empty() {
@@ -351,6 +414,9 @@ fn main() {
             get_current_wallpaper,
             list_local_wallpapers,
             list_system_wallpapers,
+            list_bing_wallpapers,
+            download_bing_wallpaper,
+            pick_bing_wallpaper_directory,
             list_wallpapers_by_paths,
             pick_wallpaper_directory,
             reveal_in_explorer,

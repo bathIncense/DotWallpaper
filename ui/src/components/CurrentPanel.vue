@@ -11,6 +11,7 @@ import { Check, ChevronLeft, ChevronRight, LayoutGrid, Maximize, Sparkles, Star,
 import {
   baseName,
   displaySrc,
+  isRemoteSrc,
   useWallpaperStore,
   type WallpaperItem,
 } from "../stores/wallpaper";
@@ -328,10 +329,10 @@ const previewName = computed(() => {
 });
 const previewPath = computed(() => previewTarget.value?.path || "");
 
-// 路径文件扩展名徽标（如 .png / .jpg）
+// 路径文件扩展名徽标（如 .png / .jpg）；必应在线壁纸的 path 是远程 URL，不展示扩展名
 const previewNameType = computed(() => {
   const p = previewPath.value;
-  if (!p) return "";
+  if (!p || isRemoteSrc(p)) return "";
   const ext = p.split(".").pop();
   return ext && ext.length <= 6 ? `.${ext.toLowerCase()}` : "";
 });
@@ -343,10 +344,11 @@ const currentName = computed(() => {
 });
 
 // 预览目标是否为已设置到桌面的当前壁纸（用于状态点颜色与文案）
+// 必应来源预览项持有远程 URL，需经 store 的下载记录比对，不能直接比 path
 const previewIsCurrent = computed(() => {
   const p = previewTarget.value;
-  const c = store.currentWallpaper;
-  return !!p && !!c && p.path === c.path;
+  if (!p) return false;
+  return store.isCurrentItem(p);
 });
 
 // 正在预览的壁纸是否已收藏（书签状态展示与快捷切换）
@@ -371,10 +373,14 @@ function onPreviewContext(e: MouseEvent) {
   const t = previewTarget.value;
   if (!t || !t.path) return;
   e.preventDefault();
-  const fromGrid = store.gridItems.some((it) => it.path === t.path);
-  const item: WallpaperItem = {
+  const fromGrid = store.gridItems.find(
+    (it) => it.path === t.path && it.kind === t.kind
+  );
+  // 命中网格项则直接复用（保留 kind/date/title，必应项右键时仍按在线壁纸处理）；
+  // 不在网格中的（纯当前桌面壁纸）构造只读 current 项
+  const item: WallpaperItem = fromGrid ?? {
     key: "preview_ctx",
-    kind: fromGrid ? "local" : "current",
+    kind: "current",
     path: t.path,
     title: t.title || baseName(t.path),
   };
@@ -596,9 +602,9 @@ onUnmounted(() => {
           <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent/90"></span>
           <span class="shrink-0 text-faint">预览</span>
           <span class="min-w-0 truncate text-tx" :title="previewName + '（当前选中，仅预览）'">{{ previewName || "—" }}</span>
-          <!-- 收藏状态：星标展示 + 快捷收藏/取消收藏 -->
+          <!-- 收藏状态：星标展示 + 快捷收藏/取消收藏（必应在线壁纸不支持收藏） -->
           <button
-            v-if="previewTarget?.path"
+            v-if="previewTarget?.path && previewTarget?.kind !== 'bing'"
             class="flex shrink-0 cursor-pointer items-center rounded p-0.5 transition-colors hover:bg-white/10"
             :title="previewIsFav ? '已收藏，点击取消收藏' : '收藏该壁纸 (Ctrl+F)'"
             @click.stop="onTogglePreviewFav"

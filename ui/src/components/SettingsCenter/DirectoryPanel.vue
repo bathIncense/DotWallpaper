@@ -1,10 +1,11 @@
 <script setup lang="ts">
 // 壁纸目录设置 — 当前目录显示 / 选择目录 / 恢复默认
-import { ref } from "vue";
+import { ref, onMounted } from "vue";
 import { NButton, NIcon, useMessage } from "naive-ui";
-import { FolderOpen, FolderSync, Trash2 } from "lucide-vue-next";
-import { useWallpaperStore, DIR_STORAGE_KEY } from "@/stores/wallpaper";
+import { FolderOpen, FolderSync, Trash2, Image as ImageIcon, DownloadCloud } from "lucide-vue-next";
+import { useWallpaperStore, DIR_STORAGE_KEY, BING_DIR_KEY } from "@/stores/wallpaper";
 import { toast } from "@/lib/naive-host";
+import { invoke } from "@tauri-apps/api/core";
 
 const store = useWallpaperStore();
 const message = useMessage();
@@ -49,6 +50,47 @@ async function onRestoreDefault() {
     message.error(String(err));
   }
 }
+
+// 必应壁纸目录
+const bingLoading = ref(false);
+const bingDir = ref("");
+
+// 从 localStorage 读取当前必应下载目录（与本地壁纸目录保持一致的前端持久化方式）
+function loadBingDir() {
+  try {
+    bingDir.value = localStorage.getItem(BING_DIR_KEY) || "";
+  } catch {
+    bingDir.value = "";
+  }
+}
+
+async function onPickBingDirectory() {
+  bingLoading.value = true;
+  try {
+    const picked = (await invoke("pick_bing_wallpaper_directory")) as string | null;
+    if (picked) {
+      bingDir.value = picked;
+      try {
+        localStorage.setItem(BING_DIR_KEY, picked);
+      } catch { /* ignore */ }
+      toast("已选择必应壁纸目录：" + picked, "success");
+    }
+  } catch (err: unknown) {
+    message.error(String(err));
+  } finally {
+    bingLoading.value = false;
+  }
+}
+
+async function onRestoreDefaultBing() {
+  bingDir.value = "";
+  try {
+    localStorage.removeItem(BING_DIR_KEY);
+  } catch { /* ignore */ }
+  toast("已恢复必应壁纸默认目录（图片目录\\BingWallpaper）", "success");
+}
+
+onMounted(() => { loadBingDir(); });
 </script>
 
 <template>
@@ -97,6 +139,55 @@ async function onRestoreDefault() {
     <div class="dir-note">
       <NIcon :component="FolderOpen" :size="13" class="note-icon" />
       <span>选择目录后，左侧壁纸列表将自动刷新，切换目录无需重启应用</span>
+    </div>
+
+    <div class="divider" />
+
+    <!-- 必应壁纸目录 -->
+    <div class="panel-header pt-5">
+      <NIcon :component="DownloadCloud" :size="18" class="panel-icon text-accent" />
+      <div class="panel-title">必应壁纸目录</div>
+      <div class="panel-desc">在线壁纸下载保存位置</div>
+    </div>
+
+    <div class="dir-card">
+      <div class="dir-label">下载目录</div>
+      <div class="dir-value">
+        <NIcon :component="ImageIcon" :size="16" class="dir-icon" />
+        <span class="dir-path">
+          {{ bingDir ? bingDir : "默认（图片目录\\BingWallpaper）" }}
+        </span>
+      </div>
+    </div>
+
+    <div class="dir-actions">
+      <NButton
+        type="primary"
+        size="small"
+        @click="onPickBingDirectory"
+        :disabled="bingLoading"
+      >
+        <template #icon>
+          <NIcon :component="FolderOpen" />
+        </template>
+        {{ bingLoading ? "正在选择..." : "选择目录" }}
+      </NButton>
+
+      <NButton
+        size="small"
+        secondary
+        @click="onRestoreDefaultBing"
+      >
+        <template #icon>
+          <NIcon :component="Trash2" :size="15" />
+        </template>
+        恢复默认目录
+      </NButton>
+    </div>
+
+    <div class="dir-note">
+      <NIcon :component="DownloadCloud" :size="13" class="note-icon" />
+      <span>点击"设为壁纸"时，必应原图将下载到此目录，文件名为 BingWallpaper_YYYYMMDD.jpg</span>
     </div>
   </div>
 </template>

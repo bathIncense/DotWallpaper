@@ -16,6 +16,7 @@ import DropZone from "./components/DropZone.vue";
 import NaiveBridge from "./components/NaiveBridge.vue";
 import UpdateDialog from "./components/UpdateDialog.vue";
 import { useWallpaperStore } from "./stores/wallpaper";
+import { toast } from "./lib/naive-host";
 import { useUpdaterStore } from '@/stores/updater'
 import { isStoreBuild } from '@/utils/updater'
 
@@ -110,15 +111,18 @@ function onKeydown(e: KeyboardEvent) {
     e.preventDefault();
     void store.loadWallpapers();
   }
-  // Ctrl+F = 收藏当前预览壁纸 / 取消收藏（toggle）
+  // Ctrl+F = 收藏当前预览壁纸 / 取消收藏（toggle）；必应在线壁纸不支持收藏
   if (e.ctrlKey && e.key.toLowerCase() === "f") {
     e.preventDefault();
-    const p = store.previewTarget?.path;
-    if (p) {
-      const fav = store.toggleFavorite(p);
-      if (fav) store.message?.success("已收藏");
-      else store.message?.info("已取消收藏");
+    const target = store.previewTarget;
+    if (!target?.path) return;
+    if (target.kind === "bing") {
+      toast("必应在线壁纸不支持收藏", "warning");
+      return;
     }
+    const fav = store.toggleFavorite(target.path);
+    if (fav) toast("已收藏", "success");
+    else toast("已取消收藏", "warning");
   }
 }
 

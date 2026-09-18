@@ -49,6 +49,10 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
   const previewItem = ref<WallpaperItem | null>(null); // 正在预览的壁纸（选中态，非当前桌面）
   const desktopStyle = ref<{ style: number; tile: boolean } | null>(null); // 桌面壁纸样式
   const isApplying = ref(false); // 应用壁纸 loading
+  // 必应壁纸已下载到本地的路径记录（date → 本地绝对路径）：
+  // bing 列表项的 path 是远程 URL，而桌面实际使用的是下载后的本地文件，
+  // 靠这份记录才能把"桌面正在显示的壁纸"对应回列表中的必应卡片（绿框）
+  const bingLocalPaths = ref<Record<string, string>>({});
   const loadingMore = ref(false);
   const allCount = ref(0);
 
@@ -82,8 +86,12 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
     ctxY.value = Math.min(y, window.innerHeight - 220);
     ctxVisible.value = true;
     // 系统壁纸 / 收藏夹为只读视图：右键菜单不提供删除入口
-    // （收藏夹是书签视图，删除文件入口仍由本地/系统来源提供，避免误删）
-    ctxReadOnly.value = source.value === "system" || source.value === "favorites";
+    // （收藏夹是书签视图，删除文件入口仍由本地/系统来源提供，避免误删）；
+    // 必应壁纸为在线图片，同样无本地文件可删
+    ctxReadOnly.value =
+      source.value === "system" ||
+      source.value === "favorites" ||
+      item.kind === "bing";
   }
 
   function closeContextMenu() {
@@ -133,6 +141,43 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
   }
 
   // ---- 设置壁纸（核心） ----
+  // 必应在线壁纸：先把原图下载到本地缓存目录（同一天重复设置直接复用已下载文件），
+  // 再交给 set_wallpaper —— Win32 SPI_SETDESKWALLPAPER 只接受本地文件路径
+  async function ensureLocalPath(item: WallpaperItem): Promise<string> {
+    if (item.kind !== "bing" || !isRemoteSrc(item.path)) return item.path || "";
+    // 下载目录由前端 localStorage 提供（未配置则传 null，后端退回默认目录）
+    let bingDir = "";
+    try { bingDir = localStorage.getItem(BING_DIR_KEY) || ""; } catch { /* ignore */ }
+    const local = (await invoke("download_bing_wallpaper", {
+      url: item.path,
+      date: item.date || "",
+      dir: bingDir || null,
+    })) as string;
+    if (item.date && local) {
+      bingLocalPaths.value = { ...bingLocalPaths.value, [item.date]: local };
+    }
+    return local;
+  }
+
+  // 从本地缓存文件名反推必应日期（BingWallpaper_YYYYMMDD.jpg）：
+  // 应用启动时据此恢复"当前壁纸 ↔ 必应卡片"的绿框对应关系
+  function bingDateFromPath(path: string): string {
+    const m = /BingWallpaper_(\d{8})\.jpg$/i.exec(path || "");
+    return m ? m[1] : "";
+  }
+
+  // 某项是否为"当前已设置到桌面的壁纸"
+  // （必应项 path 为远程 URL，需经下载记录比对；本地项直接比对路径）
+  function isCurrentItem(item: WallpaperItem): boolean {
+    const cur = currentWallpaper.value;
+    if (!cur?.path) return false;
+    if (item.kind === "bing") {
+      const local = item.date ? bingLocalPaths.value[item.date] : "";
+      return !!local && local === cur.path;
+    }
+    return !!item.path && item.path === cur.path;
+  }
+
   async function doSetWallpaper(item: WallpaperItem): Promise<{ path: string }> {
     const payload = item.path || "";
     const result = (await invoke("set_wallpaper", {
@@ -212,11 +257,15 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
         await invoke("set_desktop_style", { style: style.style, tile: style.tile });
         desktopStyle.value = { ...style };
       }
-      const result = await doSetWallpaper(item);
+      // 必应壁纸：先下载原图到本地缓存，再设置（下载期间按钮保持 loading）
+      const localPath = await ensureLocalPath(item);
+      const result = await doSetWallpaper({ ...item, path: localPath });
       currentWallpaper.value = {
         key: "current_" + (result.path || ""),
         kind: "local",
         path: result.path,
+        // 保留必应中文标题，避免右侧"当前壁纸"只剩 BingWallpaper_20260911.jpg 这类文件名
+        title: item.kind === "bing" ? item.title || undefined : undefined,
       };
       toast("壁纸设置成功", "success");
       return true;
@@ -252,6 +301,17 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
       } else if (source.value === "favorites") {
         // 收藏夹：按收藏路径在本地/系统两个来源中取交集，复用缩略图缓存
         allEntries = await loadFavoriteEntries();
+      } else if (source.value === "bing") {
+        // 必应每日壁纸：仅拉在线列表（远程原图 URL + 远程缩略图 URL），
+        // 列表阶段不下载原图，只有"设为壁纸"时才按需下载到本地
+        const list = (await invoke("list_bing_wallpapers")) as BingWallpaperData[];
+        allEntries = list.map((b) => ({
+          path: b.url,
+          thumb: b.thumb,
+          title: b.title,
+          date: b.date,
+          kind: "bing" as WallpaperKind,
+        }));
       } else {
         allEntries = (await invoke("list_local_wallpapers", {
           directory: resolveDirArg(),
@@ -267,12 +327,15 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
   function appendBatch() {
     const batch = allEntries.slice(loadedCount, loadedCount + PAGE_SIZE);
     batch.forEach((e) => {
+      // 条目可能自带 kind（必应在线壁纸）/ title / date，缺省按本地壁纸处理
+      const kind = e.kind ?? "local";
       gridItems.value.push({
-        key: "local_" + e.path,
-        kind: "local" as WallpaperKind,
+        key: `${kind}_${e.path}`,
+        kind,
         path: e.path,
-        title: baseName(e.path),
+        title: e.title || baseName(e.path),
         thumb: e.thumb || undefined,
+        date: e.date,
       });
       loadedCount++;
     });
@@ -298,6 +361,12 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
       const path = (await invoke("get_current_wallpaper")) as string;
       if (path) {
         currentWallpaper.value = { key: "current_" + path, kind: "local", path };
+        // 桌面壁纸若来自必应缓存目录（BingWallpaper_YYYYMMDD.jpg），登记 date → 本地路径，
+        // 保证启动后切到必应来源时对应卡片仍能显示"当前"绿框
+        const bingDate = bingDateFromPath(path);
+        if (bingDate) {
+          bingLocalPaths.value = { ...bingLocalPaths.value, [bingDate]: path };
+        }
       } else {
         currentWallpaper.value = null;
       }
@@ -361,6 +430,13 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
     const had = isFavorite(path);
     if (had) removeFavorite(path);
     else addFavorite(path);
+    // 在线壁纸（必应）不可收藏：其 path 是远程 URL，收藏夹按本地路径向后端检索，
+    // 收藏它只会留下永远命中不了的失效书签
+    if (isRemoteSrc(path)) return false;
+    const had = favorites.value.has(path);
+    if (had) favorites.value.delete(path);
+    else favorites.value.add(path);
+    persistFavorites();
 
     // 在收藏夹页取消收藏：立即移除卡片并清空对应预览，避免幽灵项
     if (had && source.value === "favorites") {
@@ -407,6 +483,11 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
     }
 
     if (action === "toggle-favorite") {
+      // 收藏夹以本地文件路径为书签，必应在线壁纸（远程 URL）不适用
+      if (item.kind === "bing") {
+        toast("必应在线壁纸暂不支持收藏", "warning");
+        return;
+      }
       // 收藏 / 取消收藏：仅书签标记，不删文件
       const fav = toggleFavorite(item.path);
       if (fav) toast("已收藏：" + baseName(item.path || ""), "success");
@@ -415,13 +496,23 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
     }
 
     if (action === "reveal-folder") {
-      // 在系统资源管理器中打开文件所在目录并定位（本地/系统壁纸通用）
-      if (!item.path) {
-        toast("当前壁纸无本地路径", "warning");
+      // 在系统资源管理器中打开文件所在目录并定位（本地/系统壁纸通用）；
+      // 必应壁纸需先"设为桌面"下载到本地后才能定位，未下载时给引导提示
+      const localPath =
+        item.kind === "bing"
+          ? (item.date && bingLocalPaths.value[item.date]) || ""
+          : item.path || "";
+      if (!localPath) {
+        toast(
+          item.kind === "bing"
+            ? "必应壁纸为在线图片，设为桌面后会下载到本地"
+            : "当前壁纸无本地路径",
+          "warning"
+        );
         return;
       }
       try {
-        await invoke("reveal_in_explorer", { path: item.path });
+        await invoke("reveal_in_explorer", { path: localPath });
       } catch (err: unknown) {
         toast("打开目录失败：" + ((err as Error)?.message || String(err)), "error");
       }
@@ -429,8 +520,9 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
     }
 
     if (action === "delete-wallpaper" && item.kind !== "current") {
-      // 系统壁纸来源只读：纵深防御，禁止进入删除流程
-      if (source.value === "system") return;
+      // 系统壁纸来源只读：纵深防御，禁止进入删除流程；
+      // 必应壁纸是远程图片、本地无对应文件，同样禁止删除
+      if (source.value === "system" || item.kind === "bing") return;
       await removeWallpaper(item);
     }
   }
@@ -490,6 +582,7 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
     // getters
     hasMore,
     previewTarget,
+    isCurrentItem,
     // actions
     setSource,
     openContextMenu,

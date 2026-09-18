@@ -3,7 +3,7 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from "vue";
 import type { Component } from "vue";
 import { NIcon } from "naive-ui";
-import { Layers, Monitor, Star } from "lucide-vue-next";
+import { Globe, Layers, Monitor, Star } from "lucide-vue-next";
 import defaultJpg from '../assets/images/default.jpg'
 import { toast } from "../lib/naive-host";
 import {
@@ -24,17 +24,14 @@ const sourceTabMeta: Record<
   local: { label: "本地", icon: Layers },
   system: { label: "系统", icon: Monitor },
   favorites: { label: "收藏", icon: Star },
+  bing: { label: "必应", icon: Globe },
 };
 
 // 按用户配置顺序 + 可见性过滤后实际渲染的选项卡列表
+//（local 恒可见，其余来源读取各自可见性开关）
 const visibleSourceTabs = computed(() =>
   store.sourceOrder
-    .filter((key) => {
-      if (key === "local") return true;
-      return key === "system"
-        ? store.sourceVisibility.system
-        : store.sourceVisibility.favorites;
-    })
+    .filter((key) => key === "local" || store.sourceVisibility[key])
     .map((key) => ({ key, ...sourceTabMeta[key] }))
 );
 
@@ -44,6 +41,9 @@ const dirHint = computed(() => {
   }
   if (store.source === "favorites") {
     return "收藏夹：右键壁纸或点击卡片星标即可收藏/取消收藏";
+  }
+  if (store.source === "bing") {
+    return "必应每日壁纸：在线图源，设为桌面时自动下载到本地";
   }
   return store.currentDir ? "壁纸目录：" + store.currentDir : "壁纸目录：默认（图片）";
 });
@@ -95,8 +95,9 @@ onUnmounted(() => {
 });
 
 // 是否桌面上真正设置的当前壁纸（绿色，已设置到桌面）
+// 判断交给 store：必应来源列表项持有的是远程 URL，需经本地下载记录比对
 function isCurrent(item: WallpaperItem) {
-  return !!item.path && !!store.currentWallpaper && item.path === store.currentWallpaper.path;
+  return store.isCurrentItem(item);
 }
 
 // 是否正在预览/选中（蓝色；当前壁纸绿框优先，两态不叠加显示）
@@ -286,8 +287,10 @@ function onThumbLoad(e: Event) {
                 @load="onThumbLoad"
               />
             </div>
-            <!-- 收藏星标：已收藏常显琥珀色，未收藏 hover 浮现；点击切换收藏 -->
+            <!-- 收藏星标：已收藏常显琥珀色，未收藏 hover 浮现；点击切换收藏
+                （必应在线壁纸为远程 URL，不参与收藏夹书签体系，不显示星标） -->
             <button
+              v-if="item.kind !== 'bing'"
               class="fav-badge absolute right-1.5 top-1.5 z-[6] flex h-[22px] w-[22px] cursor-pointer items-center justify-center rounded-md border border-white/10 bg-black/45 opacity-0 backdrop-blur-[2px] transition-opacity duration-200 group-hover:opacity-100 hover:border-white/25 hover:bg-black/65"
               :style="isFav(item) ? { opacity: 1 } : undefined"
               :title="isFav(item) ? '取消收藏' : '收藏 (Ctrl+F)'"
@@ -330,7 +333,9 @@ function onThumbLoad(e: Event) {
                 ? "还没有收藏的壁纸：右键壁纸或点击卡片星标即可收藏"
                 : store.source === "system"
                   ? "系统壁纸目录中暂无可用图片"
-                  : "此目录下暂无可用图片，可到设置中更换壁纸目录"
+                  : store.source === "bing"
+                    ? "必应壁纸加载失败：请检查网络连接后重试"
+                    : "此目录下暂无可用图片，可到设置中更换壁纸目录"
             }}
           </p>
         </div>

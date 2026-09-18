@@ -2,13 +2,15 @@
 // 壁纸来源显示 — 控制左侧选项卡的展示/隐藏与排列顺序（本地默认强制开启）
 import { ref } from "vue";
 import { NIcon, NSwitch } from "naive-ui";
-import { Eye, FolderHeart, GripVertical, Layers, Monitor } from "lucide-vue-next";
+import { Eye, FolderHeart, Globe, GripVertical, Layers, Monitor } from "lucide-vue-next";
 import { useWallpaperStore } from "@/stores/wallpaper";
 import type { WallpaperSource } from "@/stores/wallpaper";
 
 const store = useWallpaperStore();
 
 // 来源选项配置：local 不允许关闭（开关禁用且始终开启）
+// 注意：sourceOrder 中若有历史遗留的未知 key，rowByKey[key] 会取不到配置，
+// 模板中已用 rowByKey[key] && 做空值保护
 const sourceRows = [
   {
     key: "local",
@@ -16,6 +18,13 @@ const sourceRows = [
     desc: "展示本地壁纸目录中的图片（默认必开，不可关闭）",
     icon: Layers,
     locked: true,
+  },
+  {
+    key: "bing",
+    label: "必应壁纸",
+    desc: "展示必应每日壁纸（在线图源，设为桌面时自动下载到本地）",
+    icon: Globe,
+    locked: false,
   },
   {
     key: "system",
@@ -33,14 +42,16 @@ const sourceRows = [
   },
 ] as const;
 
-function isVisible(key: (typeof sourceRows)[number]["key"]): boolean {
-  if (key === "local") return true;
-  return key === "system"
-    ? store.sourceVisibility.system
-    : store.sourceVisibility.favorites;
+// 各来源的可见性取值（local 恒为 true）
+function visValue(key: WallpaperSource): boolean {
+  return key === "local" ? true : store.sourceVisibility[key];
 }
 
-function onChange(key: "system" | "favorites", v: boolean) {
+function isVisible(key: WallpaperSource): boolean {
+  return visValue(key);
+}
+
+function onChange(key: Exclude<WallpaperSource, "local">, v: boolean) {
   store.setSourceVisibility(key, v);
 }
 
@@ -144,10 +155,10 @@ function onDragPointerUp() {
         <div class="flex shrink-0 items-center gap-1">
           <span class="mx-1 h-4 w-px bg-white/10"></span>
           <n-switch
-            v-if="rowByKey[key].key !== 'local'"
-            :value="rowByKey[key].key === 'system' ? store.sourceVisibility.system : store.sourceVisibility.favorites"
+            v-if="key !== 'local'"
+            :value="visValue(key)"
             size="small"
-            @update:value="(v: boolean) => onChange(rowByKey[key].key as 'system' | 'favorites', v)"
+            @update:value="(v: boolean) => onChange(key as Exclude<WallpaperSource, 'local'>, v)"
           />
           <!-- 本地：始终开启且禁改 -->
           <n-switch v-else size="small" :value="true" disabled />
@@ -157,7 +168,7 @@ function onDragPointerUp() {
 
     <div class="src-note mt-4 flex items-center gap-2">
       <NIcon :component="Layers" :size="13" class="note-icon shrink-0" />
-      <span>本地壁纸是应用主源，始终展示；隐藏“系统 / 收藏”后对应选项卡将从左侧消失，数据不会删除。按住左侧手柄上下拖动可调整选项卡的展示顺序，自动保存</span>
+      <span>本地壁纸是应用主源，始终展示；隐藏“系统 / 收藏 / 必应”后对应选项卡将从左侧消失，数据不会删除。按住左侧手柄上下拖动可调整选项卡的展示顺序，自动保存</span>
     </div>
   </div>
 </template>

@@ -33,8 +33,9 @@ function onAction(action: string) {
           设为桌面壁纸
         </button>
 
-        <!-- 收藏 / 取消收藏：书签标记，不删文件（本地/系统壁纸通用） -->
+        <!-- 收藏 / 取消收藏：书签标记，不删文件（本地/系统壁纸通用）；必应在线壁纸为远程 URL，收藏夹书签体系不适用，不显示该入口 -->
         <button
+          v-if="store.ctxItem?.kind !== 'bing'"
           class="cm-item flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12px] text-tx transition-colors hover:bg-white/10"
           @click="onAction('toggle-favorite')"
         >
