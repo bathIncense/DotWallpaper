@@ -539,7 +539,6 @@ onUnmounted(() => {
       >
         <!-- 壁纸背景层：独立承载背景图，切换时通过 animOpacity 淡入淡出 -->
         <div class="zoom-bg" :style="getTransitionBg(selectedStyle, previewSrc)"></div>
-        <div class="zoom-mask pointer-events-none absolute inset-0 bg-black/30"></div>
         <button
           class="zoom-close absolute right-4 top-4 z-10 flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-black/50 text-white/90 transition-colors hover:bg-black/70"
           title="关闭（Esc）"
