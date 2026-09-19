@@ -11,6 +11,9 @@ mod wallpaper;
 use serde::Serialize;
 use std::path::PathBuf;
 use tauri::Manager;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri_plugin_autostart::MacosLauncher;
 
 /// 设置壁纸命令的统一返回：设置成功后返回实际使用的本地路径
 #[derive(Serialize, Clone)]
@@ -392,11 +395,55 @@ pub(crate) fn resolve_save_dir(dir: Option<String>) -> PathBuf {
     std::env::temp_dir()
 }
 
+/// 创建系统托盘图标与菜单：左键单击恢复主窗口；菜单含"显示主界面 / 退出"。
+/// 关闭窗口行为（直接退出 / 隐藏到托盘）由前端读取 localStorage 配置决定。
+fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+    let show = MenuItem::with_id(app, "show", "显示主界面", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+
+    TrayIconBuilder::new()
+        .icon(app.default_window_icon().unwrap().clone())
+        .tooltip("DotWallpaper 壁纸工具")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "show" => {
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.show();
+                    let _ = win.set_focus();
+                }
+            }
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                let app = tray.app_handle();
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.show();
+                    let _ = win.set_focus();
+                }
+            }
+        })
+        .build(app)?;
+    Ok(())
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            Some(vec![]),
+        ))
         .setup(|app| {
             // 启动时即把缩略图缓存目录加入 asset protocol scope，
             // 保证 WebView 可通过 asset/convertFileSrc 加载缩略图。
@@ -406,6 +453,9 @@ fn main() {
                 }
                 ensure_asset_scope(app.handle(), &cache);
             }
+            // 系统托盘：左键单击恢复主窗口，右键菜单提供"显示主界面 / 退出"。
+            // 关闭窗口行为（直接退出 / 隐藏到托盘）由前端按 localStorage 配置决定。
+            setup_tray(app.handle())?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

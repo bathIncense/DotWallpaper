@@ -54,6 +54,8 @@ export const DIR_STORAGE_KEY = "dot-wallpaper-dir"; // localStorage 持久化键
 export const BING_DIR_KEY = "dot-wallpaper-bing-dir"; // localStorage 必应壁纸目录键
 export const FAVORITES_KEY = "dot-wallpaper-favorites"; // localStorage 收藏书签集合键
 export const EFFECT_STORAGE_KEY = "dot-wallpaper-effect"; // localStorage 壁纸效果键
+export const CLOSE_BEHAVIOR_KEY = "dot-wallpaper-close-behavior"; // localStorage 关闭窗口行为键
+export type CloseBehavior = "exit" | "tray"; // 关闭窗口：exit=直接退出，tray=最小化到托盘（后台运行）
 export const PAGE_SIZE = 12; // 每页加载张数
 
 /// 必应在线壁纸列表条目（对应后端 bing.rs BingWallpaper）

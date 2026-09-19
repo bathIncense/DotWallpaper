@@ -15,7 +15,7 @@ import ContextMenu from "./components/ContextMenu.vue";
 import DropZone from "./components/DropZone.vue";
 import NaiveBridge from "./components/NaiveBridge.vue";
 import UpdateDialog from "./components/UpdateDialog.vue";
-import { useWallpaperStore } from "./stores/wallpaper";
+import { useWallpaperStore, CLOSE_BEHAVIOR_KEY } from "./stores/wallpaper";
 import { toast } from "./lib/naive-host";
 import { useUpdaterStore } from '@/stores/updater'
 import { isStoreBuild } from '@/utils/updater'
@@ -133,6 +133,21 @@ function onGlobalMouseDown(e: MouseEvent) {
 }
 
 onMounted(() => {
+  // 关闭窗口行为：按设置决定直接退出或隐藏到系统托盘（后台运行）。
+  // 托盘图标由后端常驻，左键单击恢复窗口，右键菜单"退出"彻底结束进程。
+  void appWindow.onCloseRequested(async (event) => {
+    let behavior = "exit";
+    try {
+      behavior = localStorage.getItem(CLOSE_BEHAVIOR_KEY) || "tray";
+    } catch {
+      /* ignore */
+    }
+    if (behavior === "tray") {
+      event.preventDefault();
+      await appWindow.hide();
+    }
+  });
+
   // 统一在父组件初始化：先恢复目录记忆与收藏书签，再加载数据
   store.restoreDir();
   store.loadFavorites();

@@ -4,7 +4,7 @@
 // 右侧内容按 activeTab 动态渲染各子面板，便于后续扩展选项卡。
 import { ref, computed, defineComponent, h } from "vue";
 import { NIcon } from "naive-ui";
-import { Keyboard, FolderOpen, HeartHandshake, Info, LayoutGrid, Wand2 } from "lucide-vue-next";
+import { Keyboard, FolderOpen, HeartHandshake, Info, LayoutGrid, Power, Wand2 } from "lucide-vue-next";
 import SettingHeader from "./SettingHeader.vue";
 import DirectoryPanel from "./DirectoryPanel.vue";
 import SourceVisibilityPanel from "./SourceVisibilityPanel.vue";
@@ -12,8 +12,9 @@ import EffectPanel from "./EffectPanel.vue";
 import ShortcutsPanel from "./ShortcutsPanel.vue";
 import SupportPanel from "./SupportPanel.vue";
 import AboutPanel from "./AboutPanel.vue";
+import TrayPanel from "./TrayPanel.vue";
 
-type TabKey = "directory" | "source" | "effect" | "shortcuts" | "support" | "about";
+type TabKey = "directory" | "source" | "effect" | "tray" | "shortcuts" | "support" | "about";
 
 const open = ref(false);
 const activeTab = ref<TabKey>("directory");
@@ -22,6 +23,7 @@ const NAV_ITEMS: { key: TabKey; label: string; icon: any }[] = [
   { key: "directory", label: "壁纸目录", icon: FolderOpen },
   { key: "source", label: "壁纸来源", icon: LayoutGrid },
   { key: "effect", label: "壁纸效果", icon: Wand2 },
+  { key: "tray", label: "后台运行", icon: Power },
   { key: "shortcuts", label: "快捷键使用", icon: Keyboard },
   { key: "support", label: "交流打赏", icon: HeartHandshake },
   { key: "about", label: "关于", icon: Info },
@@ -42,6 +44,8 @@ const currentPanel = computed(() => {
       return defineComponent({ render: () => h(SourceVisibilityPanel) });
     case "effect":
       return defineComponent({ render: () => h(EffectPanel) });
+    case "tray":
+      return defineComponent({ render: () => h(TrayPanel) });
     case "support":
       return defineComponent({ render: () => h(SupportPanel) });
     case "about":

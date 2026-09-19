@@ -10,9 +10,13 @@
     "core:window:allow-toggle-maximize",
     "core:window:allow-current-monitor",
     "core:window:allow-close",
+    "core:window:allow-destroy",
+    "core:event:allow-listen",
+    "core:window:allow-hide",
     "core:window:allow-is-minimized",
     "dialog:default",
     "updater:default",
+    "autostart:default",
     "opener:default"
   ]
 }
