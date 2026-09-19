@@ -7,8 +7,9 @@ import { confirmDanger, toast } from "../lib/naive-host";
 import { useEffectState } from "./wallpaper/effect";
 import { useSourceState } from "./wallpaper/sources";
 import { useFavoritesState } from "./wallpaper/favorites";
-import { baseName } from "./wallpaper/utils";
+import { baseName, isRemoteSrc } from "./wallpaper/utils";
 import {
+  BING_DIR_KEY,
   DIR_STORAGE_KEY,
   PAGE_SIZE,
   type WallpaperEntryData,
@@ -16,6 +17,7 @@ import {
   type WallpaperItem,
   type WallpaperKind,
   type WallpaperSource,
+  type BingWallpaperData,
 } from "./wallpaper/types";
 
 // 类型、常量与纯工具函数从子模块统一再导出，调用方 import 路径保持不变
@@ -133,7 +135,7 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
 
   // 设置来源可见性：仅负责"隐藏当前选项卡时自动切回本地"的联动，
   // 可见性更新与持久化由 useSourceState.updateSourceVisibility 完成
-  function setSourceVisibility(key: "system" | "favorites", visible: boolean) {
+  function setSourceVisibility(key: "system" | "favorites" | "bing", visible: boolean) {
     updateSourceVisibility(key, visible);
     if (!visible && source.value === key) {
       void setSource("local");
@@ -144,12 +146,12 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
   // 必应在线壁纸：先把原图下载到本地缓存目录（同一天重复设置直接复用已下载文件），
   // 再交给 set_wallpaper —— Win32 SPI_SETDESKWALLPAPER 只接受本地文件路径
   async function ensureLocalPath(item: WallpaperItem): Promise<string> {
-    if (item.kind !== "bing" || !isRemoteSrc(item.path)) return item.path || "";
+    if (item.kind !== "bing" || !isRemoteSrc(item.path || "")) return item.path || "";
     // 下载目录由前端 localStorage 提供（未配置则传 null，后端退回默认目录）
     let bingDir = "";
     try { bingDir = localStorage.getItem(BING_DIR_KEY) || ""; } catch { /* ignore */ }
     const local = (await invoke("download_bing_wallpaper", {
-      url: item.path,
+      url: item.path || "",
       date: item.date || "",
       dir: bingDir || null,
     })) as string;
@@ -225,11 +227,18 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
     }
     isApplying.value = true;
     try {
+      // 必应壁纸：先下载原图到本地缓存，再进入效果合成或直接设置
+      // （apply_wallpaper_effect / set_wallpaper 均只接受本地文件路径）
+      const localPath = await ensureLocalPath(item);
+      if (!localPath) {
+        toast("壁纸下载失败，无法设置", "error");
+        return false;
+      }
       // 启用模糊遮罩效果时：后端合成（模糊+遮罩）后设置，样式注册表一并写入
       if (wallpaperEffect.value.enabled) {
         const styleToApply = style ?? desktopStyle.value ?? { style: 10, tile: false };
         const result = (await invoke("apply_wallpaper_effect", {
-          path,
+          path: localPath,
           style: styleToApply.style,
           tile: styleToApply.tile,
           effect: {
@@ -244,6 +253,7 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
           key: "current_" + (result.path || ""),
           kind: "local",
           path: result.path,
+          title: item.kind === "bing" ? item.title || undefined : undefined,
         };
         toast("壁纸设置成功", "success");
         return true;
@@ -257,8 +267,6 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
         await invoke("set_desktop_style", { style: style.style, tile: style.tile });
         desktopStyle.value = { ...style };
       }
-      // 必应壁纸：先下载原图到本地缓存，再设置（下载期间按钮保持 loading）
-      const localPath = await ensureLocalPath(item);
       const result = await doSetWallpaper({ ...item, path: localPath });
       currentWallpaper.value = {
         key: "current_" + (result.path || ""),
@@ -427,16 +435,12 @@ export const useWallpaperStore = defineStore("wallpaper", () => {
   // 增删收藏书签；返回是否已收藏（true = 刚加入）
   function toggleFavorite(path: string | undefined | null): boolean {
     if (!path) return false;
-    const had = isFavorite(path);
-    if (had) removeFavorite(path);
-    else addFavorite(path);
     // 在线壁纸（必应）不可收藏：其 path 是远程 URL，收藏夹按本地路径向后端检索，
     // 收藏它只会留下永远命中不了的失效书签
     if (isRemoteSrc(path)) return false;
-    const had = favorites.value.has(path);
-    if (had) favorites.value.delete(path);
-    else favorites.value.add(path);
-    persistFavorites();
+    const had = isFavorite(path);
+    if (had) removeFavorite(path);
+    else addFavorite(path);
 
     // 在收藏夹页取消收藏：立即移除卡片并清空对应预览，避免幽灵项
     if (had && source.value === "favorites") {

@@ -16,15 +16,21 @@ export function baseName(path: string): string {
   return parts[parts.length - 1];
 }
 
-// 图片能用于展示的地址：本地路径走 convertFileSrc
-export function displaySrc(item: WallpaperItem): string {
-  return item.path ? convertFileSrc(item.path) : "";
+// 是否为远程 URL（在线壁纸如必应）；远程路径不做本地 convertFileSrc
+export function isRemoteSrc(path: string): boolean {
+  return /^https?:\/\//i.test(path);
 }
 
-// 列表缩略图 URL：基于后端生成的缩略图缓存路径（无缩略图时返回空串，
-// 由调用方显示占位；不回退原图，保证大图不进入列表加载链路）
+// 图片能用于展示的地址：本地路径走 convertFileSrc；远程 URL（在线壁纸如必应）原样返回
+export function displaySrc(item: WallpaperItem): string {
+  if (!item.path) return "";
+  return isRemoteSrc(item.path) ? item.path : convertFileSrc(item.path);
+}
+
+// 缩略图地址：本地路径走 convertFileSrc；远程 URL 原样返回
 export function thumbSrc(item: WallpaperItem): string {
-  return item.thumb ? convertFileSrc(item.thumb) : "";
+  if (!item.thumb) return "";
+  return isRemoteSrc(item.thumb) ? item.thumb : convertFileSrc(item.thumb);
 }
 
 // 徽标文案（当前仅本地）

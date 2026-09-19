@@ -10,8 +10,13 @@ import {
 
 // 来源选项卡可见性与展示顺序（组合式模块：localStorage 持久化）
 export function useSourceState() {
-  // 各来源选项卡的可见性：local 默认 true、不可关闭；system 默认 false（可在设置开启）；favorites 默认 true
-  const sourceVisibility = ref<SourceVisibility>({ local: true, system: false, favorites: true });
+  // 各来源选项卡的可见性：local 默认 true、不可关闭；system 默认 false（可在设置开启）；favorites 默认 true；bing 默认 true
+  const sourceVisibility = ref<SourceVisibility>({
+    local: true,
+    system: false,
+    favorites: true,
+    bing: true,
+  });
 
   function restoreSourceVisibility() {
     try {
@@ -20,6 +25,7 @@ export function useSourceState() {
         const parsed = JSON.parse(raw) as Partial<SourceVisibility>;
         sourceVisibility.value.system = parsed.system ?? false;
         sourceVisibility.value.favorites = parsed.favorites ?? true;
+        sourceVisibility.value.bing = parsed.bing ?? true;
       }
     } catch { /* ignore */ }
   }
@@ -29,12 +35,13 @@ export function useSourceState() {
       localStorage.setItem(SOURCE_VIS_KEY, JSON.stringify({
         system: sourceVisibility.value.system,
         favorites: sourceVisibility.value.favorites,
+        bing: sourceVisibility.value.bing,
       }));
     } catch { /* ignore */ }
   }
 
   // 仅更新可见性并持久化；"隐藏当前选项卡时自动切回本地"的联动由主 store 的 setSourceVisibility 处理
-  function updateSourceVisibility(key: "system" | "favorites", visible: boolean) {
+  function updateSourceVisibility(key: "system" | "favorites" | "bing", visible: boolean) {
     sourceVisibility.value[key] = visible;
     persistSourceVisibility();
   }
@@ -50,9 +57,9 @@ export function useSourceState() {
       if (!Array.isArray(parsed)) return;
       const list = parsed.filter(
         (s): s is WallpaperSource =>
-          s === "local" || s === "system" || s === "favorites"
+          s === "local" || s === "system" || s === "favorites" || s === "bing"
       );
-      // 去重并补全缺失来源，保证数组恰好包含全部三个来源
+      // 去重并补全缺失来源，保证数组恰好包含全部来源
       const seen = new Set<WallpaperSource>(list);
       for (const s of SOURCE_ORDER_DEFAULT) {
         if (!seen.has(s)) {
