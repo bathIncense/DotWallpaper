@@ -2,37 +2,40 @@
 
 /* ============================================================
    DotWallpaper 设计令牌（Tailwind CSS v4 @theme）
-   深色沉浸式壁纸控制台：中性色偏冷蓝调，主强调为冰蓝
+   深色 macOS 原生观感：系统深灰底 + 系统蓝强调 + SF 字体栈
    ============================================================ */
 @theme {
   /* 背景层级 */
-  --color-base: #0a0e15;        /* 窗口底色（偏冷深蓝黑） */
-  --color-base-2: #0e131c;      /* 次级底色 */
-  --color-panel: #121826;       /* 面板 */
-  --color-panel-2: #171e2e;     /* 浮层/悬停底 */
-  --color-elev: #1e2739;        /* 弹层/高亮底 */
+  --color-bg: #1c1c1e;          /* 窗口底色 */
+  --color-bg-2: #232326;        /* 次级底色 */
+  --color-panel: #26262a;       /* 面板 / 卡片 */
+  --color-panel-2: #2f2f34;     /* 悬停底 */
+  --color-elev: #3a3a3f;        /* 弹层 */
 
   /* 文字 */
-  --color-tx: #e7ebf3;          /* 主文本 */
-  --color-dim: #9aa6ba;         /* 次级文本 */
-  --color-faint: #5f6c82;       /* 弱化文本 */
+  --color-tx: #ececee;
+  --color-dim: #a1a1a6;
+  --color-faint: #6e6e73;
 
   /* 边框 */
-  --color-line: rgb(255 255 255 / 0.07);
-  --color-line-2: rgb(255 255 255 / 0.14);
+  --color-line: rgb(255 255 255 / 0.08);
+  --color-line-2: rgb(255 255 255 / 0.16);
 
   /* 功能色 */
-  --color-accent: #7fa8ff;      /* 冰蓝主色 */
-  --color-accent-strong: #5f8df0;
-  --color-accent-soft: rgb(127 168 255 / 0.16);
-  --color-ok: #43d19e;
-  --color-danger: #ff6b7d;
-  --color-danger-soft: rgb(255 107 125 / 0.16);
+  --color-accent: #0a84ff;      /* macOS 深色模式系统蓝 */
+  --color-accent-strong: #409cff;
+  --color-accent-soft: rgb(10 132 255 / 0.18);
+  --color-ok: #30d158;
+  --color-warn: #ffd60a;
+  --color-danger: #ff453a;
+  --color-danger-soft: rgb(255 69 58 / 0.16);
 
-  /* 字体 */
+  /* 字体：macOS SF 优先，中文回退苹方 */
   --font-sans:
-    "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI",
-    "Microsoft YaHei", system-ui, sans-serif;
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue",
+    "PingFang SC", "Hiragino Sans GB", system-ui, sans-serif;
+
+  --radius-card: 10px;
 }
 
 /* ---------- 全局基础 ---------- */
@@ -41,50 +44,196 @@ body,
 #app {
   height: 100%;
   overflow: hidden;
+  color-scheme: dark; /* 原生控件（select / 滚动条）走深色外观 */
 }
 
 body {
   margin: 0;
-  background: transparent;
+  background: var(--color-bg);
   color: var(--color-tx);
   font-family: var(--font-sans);
   font-size: 13px;
-  line-height: 1.5;
+  line-height: 1.45;
+  letter-spacing: -0.006em;
   -webkit-font-smoothing: antialiased;
   user-select: none;
   -webkit-user-select: none;
   cursor: default;
 }
 
-/* 拖拽区域（Tauri 无边框窗口） */
-.app-drag {
-  -webkit-app-region: drag;
-}
-.app-no-drag {
-  -webkit-app-region: no-drag;
-}
-
-/* 细滚动条 */
+/* 细滚动条（macOS overlay 风格） */
 ::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+  width: 7px;
+  height: 7px;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgb(255 255 255 / 0.15);
+  background: rgb(255 255 255 / 0.18);
   border-radius: 10px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgb(255 255 255 / 0.25);
+  background: rgb(255 255 255 / 0.3);
   background-clip: content-box;
-  border: 2px solid transparent;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 
-/* 过渡动画（减少非必要动效） */
+/* ---------- macOS 控件基元（供组件复用，避免引入组件库） ---------- */
+
+/* 圆角卡片 */
+.mac-card {
+  background: var(--color-panel);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-card);
+}
+
+/* 按钮：push button */
+.mac-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 11px;
+  border-radius: 7px;
+  border: 1px solid var(--color-line-2);
+  background: linear-gradient(180deg, var(--color-panel-2), var(--color-panel));
+  color: var(--color-tx);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+  white-space: nowrap;
+}
+.mac-btn:hover:not(:disabled) {
+  border-color: rgb(255 255 255 / 0.24);
+  background: linear-gradient(180deg, var(--color-elev), var(--color-panel-2));
+}
+.mac-btn:active:not(:disabled) {
+  background: var(--color-bg-2);
+}
+.mac-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.mac-btn-primary {
+  border-color: transparent;
+  background: var(--color-accent);
+  color: #fff;
+}
+.mac-btn-primary:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--color-accent-strong);
+}
+.mac-btn-danger {
+  color: var(--color-danger);
+}
+.mac-btn-danger:hover:not(:disabled) {
+  background: var(--color-danger-soft);
+  border-color: rgb(255 69 58 / 0.4);
+}
+
+/* 分段控件（Segmented Control）：用于 填充 / 适应 */
+.mac-segmented {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border-radius: 8px;
+  background: var(--color-bg-2);
+  border: 1px solid var(--color-line);
+}
+.mac-segment {
+  height: 22px;
+  padding: 0 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--color-dim);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.mac-segment:hover {
+  color: var(--color-tx);
+}
+.mac-segment-active {
+  background: var(--color-elev);
+  color: var(--color-tx);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.35);
+}
+
+/* 下拉（保留原生 select 语义，仅去外观） */
+.mac-select {
+  appearance: none;
+  -webkit-appearance: none;
+  height: 26px;
+  max-width: 260px;
+  padding: 0 26px 0 10px;
+  border-radius: 7px;
+  border: 1px solid var(--color-line-2);
+  background-color: var(--color-panel-2);
+  color: var(--color-tx);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='rgb(161 161 166)' stroke-width='3'><path d='M6 9l6 6 6-6'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+}
+.mac-select:hover {
+  background-color: var(--color-elev);
+}
+
+/* 开关（Switch） */
+.mac-switch {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  flex: none;
+  border-radius: 999px;
+  border: none;
+  background: var(--color-elev);
+  cursor: pointer;
+  transition: background 0.18s ease;
+}
+.mac-switch-on {
+  background: var(--color-accent);
+}
+.mac-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  transition: transform 0.18s cubic-bezier(0.3, 0, 0.2, 1);
+}
+.mac-switch-on .mac-switch-knob {
+  transform: translateX(14px);
+}
+
+/* 缩略图缺省占位：纯 CSS 渐变（替代原 default.jpg） */
+.media-fallback {
+  background:
+    radial-gradient(120% 120% at 20% 10%, #454b5a 0%, #2a2e38 45%, #1d2027 100%);
+}
+
+/* 状态徽章 */
+.mac-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 500;
+  background: var(--color-bg-2);
+  border: 1px solid var(--color-line);
+}
+
+/* 过渡动画（尊重系统减少动效设置） */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

@@ -8,7 +8,8 @@
     "dev": "tauri dev",
     "build": "tauri build --target aarch64-apple-darwin --bundles app,dmg --config src-tauri/tauri.macos.conf.json",
     "build:mac": "tauri build --target aarch64-apple-darwin --bundles app,dmg --config src-tauri/tauri.macos.conf.json",
-    "build:mac:app": "tauri build --target aarch64-apple-darwin --bundles app --config src-tauri/tauri.macos.conf.json"
+    "build:mac:app": "tauri build --target aarch64-apple-darwin --bundles app --config src-tauri/tauri.macos.conf.json",
+    "release:mac": "bash scripts/release_mac.sh"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

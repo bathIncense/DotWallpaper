@@ -1,358 +1,234 @@
-// DotWallpaper 壁纸工具 - Tauri 后端入口
-// macOS 平台：AppKit/AVFoundation 设置壁纸
-// 本地壁纸源 + 拖入图片保存 + 视频/GIF/动态 HEIC
+// DotWallpaper 壁纸工具 - Tauri 后端入口（macOS）
+// 命令边界收敛为改造计划 §2.1 定义的 9 个命令 + 文件选择扩展。
 
+mod cfmedia;
+mod desktop;
+mod displays;
+mod engine;
+mod media;
+mod runtime;
+mod settings;
 mod thumbs;
-mod wallpaper;
-mod platform;
+mod types;
+mod unit_tests;
 
-use platform::Platform;
-use serde::Serialize;
 use std::path::PathBuf;
-use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
-/// 平台实例（全局共享）
-struct PlatformState {
-    platform: Arc<dyn Platform>,
+use types::{
+    ControlAction, DisplayInfo, DisplayWallpaperState, FitMode, MediaItem, WallpaperAssignment,
+};
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AppSnapshot {
+    library_dir: String,
+    displays: Vec<DisplayInfo>,
+    states: Vec<DisplayWallpaperState>,
 }
 
-impl PlatformState {
-    fn new() -> Self {
-        Self {
-            platform: Arc::from(platform::current()),
-        }
-    }
-}
-
-/// 设置壁纸命令的统一返回：设置成功后返回实际使用的本地路径
-#[derive(Serialize, Clone)]
-struct SetWallpaperResult {
-    path: String,
-}
-
-/// 拖入本地文件保存命令的返回：成功保存列表 + 跳过/失败原因
-#[derive(Serialize, Clone)]
-struct SaveDroppedPathsResult {
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportResult {
     saved: Vec<String>,
     skipped: Vec<String>,
 }
 
-/// 获取主屏幕逻辑分辨率与缩放比（用于按真实电脑屏幕比例预览）
-#[tauri::command]
-fn get_desktop_screen(app: tauri::AppHandle) -> Result<wallpaper::ScreenMeta, String> {
-    wallpaper::get_primary_screen_meta(&app)
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FrontendSettings {
+    library_dir: String,
+    default_fit_mode: FitMode,
+    default_muted: bool,
 }
 
-/// 从本地磁盘永久删除壁纸文件（仅限支持的图片扩展名）
-///
-/// 删除原图成功后同步清理其缩略图缓存；系统壁纸只读约束不变。
-#[tauri::command]
-async fn delete_wallpaper(path: String, app: tauri::AppHandle) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
-        // 先删除源文件：系统路径 / 不存在 / 不支持类型会在这一步被拒绝
-        wallpaper::delete_wallpaper_file(&path)?;
-        // 源文件删除成功后再清理缩略图缓存（尽力而为）
-        if let Ok(cache) = thumbs::cache_dir(&app) {
-            thumbs::delete_thumb(&path, &cache);
-        }
-        Ok(())
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-/// 将目录动态加入 asset protocol scope，使前端 convertFileSrc 可预览该目录图片
-fn ensure_asset_scope(app: &tauri::AppHandle, dir: &PathBuf) {
-    if let Err(e) = app.asset_protocol_scope().allow_directory(dir, true) {
-        eprintln!("[warn] asset scope 添加失败 {}: {e}", dir.display());
+fn snapshot() -> AppSnapshot {
+    AppSnapshot {
+        library_dir: settings::get().library_dir,
+        displays: displays::enumerate(),
+        states: engine::states_snapshot(),
     }
 }
 
-/// 将本地壁纸路径设置为桌面壁纸。
-///
-/// `path` 必须为本地文件系统路径。
-/// `dir` 可选：拖入图片下载保存的目标目录；为空时使用默认图片目录。
-#[tauri::command]
-async fn set_wallpaper(
-    path: String,
-    dir: Option<String>,
-    app: tauri::AppHandle,
-) -> Result<SetWallpaperResult, String> {
-    let save_dir = resolve_save_dir(dir);
-    ensure_asset_scope(&app, &save_dir);
-
-    // macOS 使用 NSWorkspace 设置壁纸（需要在主线程执行）
-    let assignment = platform::WallpaperAssignment {
-        display_id: "main".to_string(),
-        media_id: format!("image/{}", path),
-        fit_mode: platform::FitMode::Fill,
-        muted: true,
-    };
-    let (tx, rx) = std::sync::mpsc::channel();
-    let platform_arc = Arc::clone(&app.state::<PlatformState>().platform);
-    let assignment_clone = assignment.clone();
-    app.run_on_main_thread(move || {
-        let mtm = objc2_foundation::MainThreadMarker::new()
-            .expect("必须在主线程");
-        let result = platform_arc.apply_wallpaper(&assignment_clone, 0, &mtm);
-        let _ = tx.send(result);
-    })
-    .map_err(|e| format!("主线程调度失败: {e}"))?;
-    rx.recv().map_err(|e| format!("接收结果失败: {e}"))??;
-
-    Ok(SetWallpaperResult { path })
-}
-
-/// 获取当前桌面壁纸路径
-#[tauri::command]
-async fn get_current_wallpaper(_app: tauri::AppHandle) -> Result<String, String> {
-    // macOS 暂不支持读取当前壁纸，返回空
-    Ok(String::new())
-}
-
-/// 扫描壁纸目录并生成/复用缩略图，返回列表条目（原图路径 + 缩略图路径）
-///
-/// `directory` 为可选的自定义壁纸目录；传 Some 时只扫描该目录，留空则用预设目录。
-#[tauri::command]
-async fn list_local_wallpapers(
-    directory: Option<String>,
-    app: tauri::AppHandle,
-) -> Result<Vec<thumbs::WallpaperEntry>, String> {
-    // 自定义目录可能尚未加入 asset scope（此前未设置/未拖入过）；小图跳过
-    // 生成时 thumb 直接使用原图路径，需保证 convertFileSrc 可加载该目录。
-    if let Some(dir) = &directory {
-        let t = dir.trim();
-        if !t.is_empty() {
-            ensure_asset_scope(&app, &PathBuf::from(t));
-        }
+fn apply_library_dir(dir: &str) {
+    let path = PathBuf::from(dir.trim());
+    if path.is_dir() {
+        media::ensure_asset_scope(&path);
     }
-    // 目录扫描 + 缩略图缓存检测为磁盘 IO，放入 blocking 线程避免卡住主线程。
-    let cache = thumbs::cache_dir(&app).ok();
-    tauri::async_runtime::spawn_blocking(move || -> Result<Vec<thumbs::WallpaperEntry>, String> {
-        let paths = wallpaper::scan_local_wallpapers(directory)?;
-        Ok(thumbs::make_entries(&app, paths, cache.as_deref()))
-    })
-    .await
-    .map_err(|e| e.to_string())?
 }
 
-/// 扫描 macOS 系统壁纸目录（/System/Library/Desktop Pictures，含子目录）并生成缩略图，
-/// 仅供"系统壁纸"选项卡只读展示（只生成缩略图，不提供删除/写源目录）。
 #[tauri::command]
-async fn list_system_wallpapers(app: tauri::AppHandle) -> Result<Vec<thumbs::WallpaperEntry>, String> {
-    let cache = thumbs::cache_dir(&app).ok();
-    tauri::async_runtime::spawn_blocking(move || -> Result<Vec<thumbs::WallpaperEntry>, String> {
-        let paths = wallpaper::scan_system_wallpapers()?;
-        Ok(thumbs::make_entries(&app, paths, cache.as_deref()))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+fn get_app_snapshot() -> AppSnapshot {
+    snapshot()
 }
 
-/// 弹出系统目录选择框，返回用户选择的目录路径（取消时返回 None）
 #[tauri::command]
-async fn pick_wallpaper_directory(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    use tauri_plugin_dialog::DialogExt;
-
-    // 使用 spawn_blocking 避免阻塞主线程
-    let picked = tauri::async_runtime::spawn_blocking(move || {
-        app.dialog().file().blocking_pick_folder()
+async fn list_media() -> Result<Vec<MediaItem>, String> {
+    let dir = settings::get().library_dir;
+    tauri::async_runtime::spawn_blocking(move || -> Vec<MediaItem> {
+        let items = media::scan(&dir);
+        thumbs::make_entries(items)
     })
     .await
-    .map_err(|e| format!("选择目录失败：{e}"))?
-    .map(|p| p.to_string());
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn list_displays() -> Vec<DisplayInfo> {
+    displays::enumerate()
+}
+
+#[tauri::command]
+async fn apply_wallpaper(assignment: WallpaperAssignment) -> Result<DisplayWallpaperState, String> {
+    tauri::async_runtime::spawn_blocking(move || engine::apply(assignment))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn control_playback(
+    display_id: String,
+    action: ControlAction,
+) -> Result<DisplayWallpaperState, String> {
+    tauri::async_runtime::spawn_blocking(move || engine::control(display_id, action))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn pick_library_directory() -> Result<Option<String>, String> {
+    let picked = runtime::on_main(|mtm| desktop::pick_directory(mtm))?;
+    if let Some(dir) = &picked {
+        apply_library_dir(dir);
+        settings::update(|s| s.library_dir = dir.clone());
+    }
     Ok(picked)
 }
 
-/// 将原生拖放事件给出的本地文件路径保存到壁纸目录，返回保存成功与跳过列表
 #[tauri::command]
-fn save_dropped_paths(
-    paths: Vec<String>,
-    dir: Option<String>,
-    app: tauri::AppHandle,
-) -> Result<SaveDroppedPathsResult, String> {
-    let save_dir = resolve_save_dir(dir);
-    ensure_asset_scope(&app, &save_dir);
-    let (saved, skipped) = copy_dropped_files(&paths, &save_dir)?;
-    Ok(SaveDroppedPathsResult { saved, skipped })
+async fn pick_media_files() -> Result<Vec<String>, String> {
+    let picked = runtime::on_main(|mtm| Ok::<_, String>(desktop::pick_files(mtm)))??;
+    Ok(picked)
 }
 
-/// 将外部拖入的本地图片文件复制到壁纸目录（保留原名，重名自动加序号）
-fn copy_dropped_files(paths: &[String], save_dir: &std::path::Path) -> Result<(Vec<String>, Vec<String>), String> {
-    std::fs::create_dir_all(save_dir)
-        .map_err(|e| format!("创建目录失败 {}: {e}", save_dir.display()))?;
-
-    let mut saved: Vec<String> = Vec::new();
-    let mut skipped: Vec<String> = Vec::new();
-
-    for p in paths {
-        let src = std::path::Path::new(p);
-        let Some(name) = src.file_name().map(|n| n.to_string_lossy().to_string()) else {
-            continue;
-        };
-        let ext = name.rsplit('.').next().unwrap_or_default();
-        if !wallpaper::is_supported_media_ext(ext) {
-            skipped.push(format!("{name}: 不支持的格式"));
-            continue;
-        }
-
-        // 目标已存在同名时自动追加序号
-        let mut dest = save_dir.join(&name);
-        let mut idx = 1u32;
-        while dest.exists() {
-            let stem = src
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| "image".to_string());
-            let ext = src
-                .extension()
-                .map(|e| e.to_string_lossy().to_string())
-                .unwrap_or_else(|| "jpg".to_string());
-            dest = save_dir.join(format!("{stem}_{idx}.{ext}"));
-            idx += 1;
-        }
-
-        match std::fs::copy(&src, &dest) {
-            Ok(_) => saved.push(dest.to_string_lossy().to_string()),
-            Err(e) => skipped.push(format!("{name}: 复制失败 {e}")),
-        }
-    }
-
-    Ok((saved, skipped))
-}
-
-/// 解析下载保存目录：优先用户指定目录，否则使用用户图片目录
-fn resolve_save_dir(dir: Option<String>) -> PathBuf {
-    if let Some(d) = dir {
-        let t = d.trim();
-        if !t.is_empty() {
-            return PathBuf::from(t);
-        }
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(&home).join("Pictures");
-    }
-    std::env::temp_dir()
-}
-
-// ========== 平台命令 ==========
-
-/// 获取平台能力
 #[tauri::command]
-fn get_platform_capabilities(state: tauri::State<PlatformState>) -> Result<platform::PlatformCapabilities, String> {
-    let platform = &*state.platform;
-    Ok(platform.capabilities())
-}
-
-/// 枚举所有显示器
-#[tauri::command]
-fn list_displays(state: tauri::State<PlatformState>) -> Result<Vec<platform::DisplayInfo>, String> {
-    let platform = &*state.platform;
-    platform.list_displays()
-}
-
-/// 应用壁纸到指定显示器
-#[tauri::command]
-fn apply_wallpaper(
-    assignment: platform::WallpaperAssignment,
-    state: tauri::State<PlatformState>,
-    app: tauri::AppHandle,
-) -> Result<platform::DisplayWallpaperState, String> {
-    // 生成请求 ID
-    let request_id = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
-
-    // macOS 需要在主线程操作 UI API，使用通道异步等待结果
-    let (tx, rx) = std::sync::mpsc::channel();
-    let platform_arc = Arc::clone(&state.platform);
-    let assignment_clone = assignment.clone();
-    app.run_on_main_thread(move || {
-        let mtm = objc2_foundation::MainThreadMarker::new()
-            .expect("必须在主线程");
-        let result = platform_arc.apply_wallpaper(&assignment_clone, request_id, &mtm);
-        let _ = tx.send(result);
+async fn import_media(paths: Vec<String>) -> Result<ImportResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let (saved, skipped) = media::import(&paths);
+        ImportResult { saved, skipped }
     })
-    .map_err(|e| format!("主线程调度失败: {e}"))?;
-    rx.recv().map_err(|e| format!("接收结果失败: {e}"))?
+    .await
+    .map_err(|e| e.to_string())
 }
 
-/// 获取指定显示器的壁纸状态
 #[tauri::command]
-fn get_wallpaper_state(
-    display_id: String,
-    state: tauri::State<PlatformState>,
-) -> Result<platform::DisplayWallpaperState, String> {
-    let platform = &*state.platform;
-    platform.get_wallpaper_state(&display_id)
+async fn delete_media(path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || media::delete(&path))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
-/// 暂停指定显示器的动态壁纸
 #[tauri::command]
-fn pause_wallpaper(
-    display_id: String,
-    state: tauri::State<PlatformState>,
-) -> Result<(), String> {
-    let platform = &*state.platform;
-    platform.pause_wallpaper(&display_id)
+fn update_settings(new_settings: FrontendSettings) -> Result<(), String> {
+    let dir = new_settings.library_dir.clone();
+    settings::update(|s| {
+        s.library_dir = new_settings.library_dir;
+        s.default_fit_mode = new_settings.default_fit_mode;
+        s.default_muted = new_settings.default_muted;
+    });
+    apply_library_dir(&dir);
+    Ok(())
 }
 
-/// 恢复指定显示器的动态壁纸
-#[tauri::command]
-fn resume_wallpaper(
-    display_id: String,
-    state: tauri::State<PlatformState>,
-) -> Result<(), String> {
-    let platform = &*state.platform;
-    platform.resume_wallpaper(&display_id)
+/// 关闭管理窗口 = 隐藏窗口，动态壁纸继续运行；仅托盘/退出动作结束进程。
+fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
+    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+        if window.label() == "main" {
+            api.prevent_close();
+            let _ = window.hide();
+        }
+    }
 }
 
-/// 停止指定显示器的动态壁纸
-#[tauri::command]
-fn stop_wallpaper(
-    display_id: String,
-    state: tauri::State<PlatformState>,
-) -> Result<(), String> {
-    let platform = &*state.platform;
-    platform.stop_wallpaper(&display_id)
+fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+    use tauri::tray::TrayIconBuilder;
+
+    let open = MenuItem::with_id(app, "open", "打开 DotWallpaper", true, None::<&str>)?;
+    let pause = MenuItem::with_id(app, "pause_all", "暂停全部动态壁纸", true, None::<&str>)?;
+    let resume = MenuItem::with_id(app, "resume_all", "恢复全部", true, None::<&str>)?;
+    let stop = MenuItem::with_id(app, "stop_all", "停止全部动态壁纸", true, None::<&str>)?;
+    let sep = PredefinedMenuItem::separator(app)?;
+    let quit = PredefinedMenuItem::quit(app, Some("退出"))?;
+    let menu = Menu::with_items(app, &[&open, &sep, &pause, &resume, &stop, &sep, &quit])?;
+
+    let mut builder = TrayIconBuilder::with_id("main-tray")
+        .menu(&menu)
+        .tooltip("DotWallpaper")
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "open" => {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.unminimize();
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+            }
+            "pause_all" => engine::pause_all(),
+            "resume_all" => engine::resume_all(),
+            "stop_all" => engine::stop_all(),
+            "quit" => {
+                engine::stop_all();
+                engine::teardown_all();
+                app.exit(0);
+            }
+            _ => {}
+        });
+
+    if let Some(icon) = app.default_window_icon() {
+        builder = builder.icon(icon.clone());
+    }
+    builder.build(app)?;
+    Ok(())
 }
 
 fn main() {
-    // 初始化平台状态
-    let platform_state = PlatformState::new();
-
     tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
-        .manage(platform_state)
         .setup(|app| {
-            // 启动时即把缩略图缓存目录加入 asset protocol scope，
-            // 保证 WebView 可通过 asset/convertFileSrc 加载缩略图。
-            if let Ok(cache) = thumbs::cache_dir(app.handle()) {
-                if let Err(e) = std::fs::create_dir_all(&cache) {
-                    eprintln!("[warn] 创建缩略图缓存目录失败 {}: {e}", cache.display());
-                }
-                ensure_asset_scope(app.handle(), &cache);
+            let handle = app.handle();
+            runtime::init(handle);
+            settings::init(handle);
+
+            // asset protocol scope：缓存目录 + 海报目录 + 壁纸库目录
+            for dir in [thumbs::cache_dir().ok(), Some(thumbs::poster_dir()), {
+                let d = PathBuf::from(settings::get().library_dir);
+                d.is_dir().then_some(d)
+            }]
+            .into_iter()
+            .flatten()
+            {
+                let _ = std::fs::create_dir_all(&dir);
+                media::ensure_asset_scope(&dir);
             }
+
+            build_tray(handle)?;
+            engine::restore_on_startup();
+            engine::spawn_monitor();
             Ok(())
         })
+        .on_window_event(handle_window_event)
         .invoke_handler(tauri::generate_handler![
-            set_wallpaper,
-            get_current_wallpaper,
-            list_local_wallpapers,
-            list_system_wallpapers,
-            pick_wallpaper_directory,
-            save_dropped_paths,
-            delete_wallpaper,
-            get_desktop_screen,
-            get_platform_capabilities,
+            get_app_snapshot,
+            list_media,
             list_displays,
             apply_wallpaper,
-            get_wallpaper_state,
-            pause_wallpaper,
-            resume_wallpaper,
-            stop_wallpaper,
+            control_playback,
+            pick_library_directory,
+            pick_media_files,
+            import_media,
+            delete_media,
+            update_settings
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {

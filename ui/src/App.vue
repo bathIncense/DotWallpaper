@@ -1,176 +1,119 @@
 <script setup lang="ts">
-import { onMounted, computed } from "vue";
-import {
-  NConfigProvider,
-  NDialogProvider,
-  NMessageProvider,
-  darkTheme,
-  type GlobalThemeOverrides,
-} from "naive-ui";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import TitleBar from "./components/TitleBar.vue";
-import Sidebar from "./components/Sidebar.vue";
-import CurrentPanel from "./components/CurrentPanel.vue";
-import ContextMenu from "./components/ContextMenu.vue";
-import DropZone from "./components/DropZone.vue";
-import NaiveBridge from "./components/NaiveBridge.vue";
-import { useWallpaperStore } from "./stores/wallpaper";
+// App - macOS 紧凑三段式布局：顶部工具栏 / 左侧媒体网格 / 右侧预览与控制
+import { onMounted, onUnmounted } from "vue";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { useApp } from "./composables/useApp";
+import TopBar from "./components/TopBar.vue";
+import MediaGrid from "./components/MediaGrid.vue";
+import PreviewPanel from "./components/PreviewPanel.vue";
+import Toaster from "./components/Toaster.vue";
+import SvgIcon from "./components/SvgIcon.vue";
 
-const store = useWallpaperStore();
-const appWindow = getCurrentWindow();
+const app = useApp();
 
-// 检测是否为 macOS 平台
-function isMacOS(): boolean {
-  return navigator.platform?.toLowerCase().includes('mac') ?? false;
-}
+// ---------- 拖放导入 ----------
+// 优先使用 Tauri 原生拖放事件（可获得真实本地路径），
+// 浏览器 / 开发环境下回退到 HTML5 drop。
+let unlistenDragDrop: (() => void) | null = null;
 
-// Mac 平台使用原生窗口控制，隐藏自定义窗口控制
-const showMacWindowControls = computed(() => !isMacOS());
-
-// Naive UI 主题令牌：与 main.css 设计令牌对齐（冰蓝主色、圆角）
-const themeOverrides: GlobalThemeOverrides = {
-  common: {
-    primaryColor: "#7fa8ff",
-    primaryColorHover: "#97b8ff",
-    primaryColorPressed: "#5f8df0",
-    primaryColorSuppl: "#7fa8ff",
-    borderRadius: "8px",
-    fontFamily:
-      '"Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif',
-  },
-  Dialog: {
-    borderRadius: "12px",
-  },
-  Message: {
-    borderRadius: "10px",
-  },
-  // 下拉选择器：触发器/下拉菜单与 main.css 面板色对齐，选中态用冰蓝
-  Select: {
-    peers: {
-      InternalSelection: {
-        color: "#171e2e",
-        colorActive: "#171e2e",
-        border: "1px solid rgba(255, 255, 255, 0.07)",
-        borderHover: "1px solid rgba(127, 168, 255, 0.6)",
-        borderActive: "1px solid rgba(127, 168, 255, 0.9)",
-        borderFocus: "1px solid rgba(127, 168, 255, 0.9)",
-        boxShadowActive: "0 0 0 2px rgba(127, 168, 255, 0.18)",
-        boxShadowFocus: "0 0 0 2px rgba(127, 168, 255, 0.18)",
-        textColor: "#9aa6ba",
-        placeholderColor: "#5f6c82",
-        caretColor: "#7fa8ff",
-        arrowColor: "#5f6c82",
-        borderRadius: "8px",
-        heightSmall: "28px",
-      },
-      InternalSelectMenu: {
-        color: "#1e2739",
-        borderRadius: "8px",
-        optionTextColor: "#9aa6ba",
-        optionTextColorActive: "#7fa8ff",
-        optionTextColorPressed: "#e7ebf3",
-        optionColorPending: "rgba(127, 168, 255, 0.16)",
-        optionColorActive: "rgba(127, 168, 255, 0.1)",
-        optionColorActivePending: "rgba(127, 168, 255, 0.2)",
-        optionCheckColor: "#7fa8ff",
-        groupHeaderTextColor: "#5f6c82",
-      },
-    },
-  },
-};
-
-// 双击主区域空白（非按钮/卡片/当前壁纸区域）→ 最小化/还原
-function onMainAreaDblclick(e: MouseEvent) {
-  const t = e.target as HTMLElement;
-  if (
-    t.closest(".n-button") ||
-    t.closest(".wallpaper-item") ||
-    t.closest(".current-box")
-  ) {
-    return;
+onMounted(async () => {
+  void app.refreshAll();
+  try {
+    unlistenDragDrop = await getCurrentWebview().onDragDropEvent((event) => {
+      const payload = event.payload;
+      if (payload.type === "enter" || payload.type === "over") {
+        app.setDragging(true);
+      } else if (payload.type === "leave") {
+        app.setDragging(false);
+      } else if (payload.type === "drop") {
+        app.setDragging(false);
+        const paths = payload.paths ?? [];
+        if (paths.length) void app.importPaths(paths);
+      }
+    });
+  } catch {
+    // 非 Tauri 环境：使用 HTML5 drop（见 onHtmlDrop）
   }
-  toggleMinimize();
-}
-
-async function toggleMinimize() {
-  const minimized = await appWindow.isMinimized();
-  if (minimized) await appWindow.unminimize();
-  else await appWindow.minimize();
-}
-
-// Tauri 原生拖放事件回调：收到的本地文件路径列表
-async function onDropFiles(paths: string[]) {
-  await store.saveDroppedPaths(paths);
-}
-
-function onKeydown(e: KeyboardEvent) {
-  // ⌘+S = 将正在预览的壁纸设为桌面壁纸
-  if (e.metaKey && e.key.toLowerCase() === "s") {
-    e.preventDefault();
-    void store.applyPreviewAsDesktop();
-  }
-  // ⌘+R = 重新加载壁纸列表
-  if (e.metaKey && e.key.toLowerCase() === "r") {
-    e.preventDefault();
-    void store.loadWallpapers();
-  }
-}
-
-// 点击页面任意非菜单区域关闭右键菜单
-function onGlobalMouseDown(e: MouseEvent) {
-  const t = e.target as HTMLElement;
-  if (!t.closest(".context-menu")) store.closeContextMenu();
-}
-
-onMounted(() => {
-  // 统一在父组件初始化：先恢复目录记忆，再加载数据
-  store.restoreDir();
-  void store.loadCurrentWallpaper();
-  void store.loadWallpapers();
-  void store.initPlatform(); // 初始化平台能力
   window.addEventListener("keydown", onKeydown);
-  window.addEventListener("mousedown", onGlobalMouseDown);
-  window.addEventListener("blur", store.closeContextMenu);
-
-  // 首次打开且未设置目录时，自动弹出目录选择
-  if (!store.currentDir) {
-    setTimeout(() => {
-      void store.pickAndApplyDirectory();
-    }, 500);
-  }
 });
+
+onUnmounted(() => {
+  unlistenDragDrop?.();
+  window.removeEventListener("keydown", onKeydown);
+});
+
+// HTML5 回退：仅在没有 Tauri 拖放事件时生效
+function onHtmlDrop(e: DragEvent) {
+  if (unlistenDragDrop) return;
+  const files = Array.from(e.dataTransfer?.files ?? []);
+  const paths = files
+    .map((f) => (f as File & { path?: string }).path || f.name)
+    .filter((p) => p.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(p));
+  app.setDragging(false);
+  if (paths.length) void app.importPaths(paths);
+  else if (files.length) app.toast("浏览器环境无法取得文件路径，请在应用内拖放导入", "warning");
+}
+
+function onHtmlDragOver(e: DragEvent) {
+  if (unlistenDragDrop) return;
+  e.preventDefault();
+  app.setDragging(true);
+}
+
+// ---------- 快捷键 ----------
+function onKeydown(e: KeyboardEvent) {
+  if (!e.metaKey) return;
+  const key = e.key.toLowerCase();
+  if (key === "r") {
+    e.preventDefault();
+    void app.refreshAll();
+  } else if (key === "s") {
+    e.preventDefault();
+    void app.applySelected();
+  }
+}
 </script>
 
 <template>
-  <n-config-provider :theme="darkTheme" :theme-overrides="themeOverrides">
-    <n-message-provider placement="top">
-      <n-dialog-provider>
-        <NaiveBridge>
-          <div
-            class="app-shell relative flex h-screen w-screen flex-col overflow-hidden rounded-[14px] border border-line-2 bg-[rgba(13,18,28,0.92)] shadow-[0_18px_48px_rgba(0,0,0,0.42)]"
-          >
-            <TitleBar />
+  <div
+    class="flex h-screen w-screen flex-col overflow-hidden bg-bg text-tx"
+    @dragover="onHtmlDragOver"
+    @dragleave.self="app.setDragging(false)"
+    @drop.prevent="onHtmlDrop"
+  >
+    <TopBar />
 
-            <!-- 主区域：左右分栏 -->
-            <div class="main-area flex min-h-0 flex-1 gap-3.5 p-3.5" @dblclick="onMainAreaDblclick">
-              <!-- 左栏：壁纸网格 -->
-              <Sidebar />
+    <main class="flex min-h-0 flex-1">
+      <MediaGrid />
+      <PreviewPanel />
+    </main>
 
-              <!-- 分割线 -->
-              <div class="divider w-px shrink-0 bg-line"></div>
-
-              <!-- 右栏：当前壁纸 -->
-              <CurrentPanel />
-            </div>
-
-            <!-- 全局右键菜单 -->
-            <ContextMenu />
-
-            <!-- 全局文件拖放接收 -->
-            <DropZone @drop-files="onDropFiles" />
+    <!-- 拖放遮罩 -->
+    <Teleport to="body">
+      <Transition name="drag">
+        <div
+          v-if="app.dragging.value"
+          class="pointer-events-none fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-[2px]"
+        >
+          <div class="flex items-center gap-2 rounded-2xl border border-accent/45 bg-accent-soft px-5 py-3.5 text-[13px] font-medium text-accent shadow-[0_18px_44px_rgba(0,0,0,0.5)]">
+            <SvgIcon name="import" :size="18" />
+            松开即导入壁纸目录
           </div>
-        </NaiveBridge>
-      </n-dialog-provider>
-    </n-message-provider>
-  </n-config-provider>
+        </div>
+      </Transition>
+    </Teleport>
+
+    <Toaster />
+  </div>
 </template>
+
+<style scoped>
+.drag-enter-active,
+.drag-leave-active {
+  transition: opacity 0.15s ease;
+}
+.drag-enter-from,
+.drag-leave-to {
+  opacity: 0;
+}
+</style>
