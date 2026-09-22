@@ -12,12 +12,26 @@ const isTauri = "__TAURI_INTERNALS__" in window;
 
 const displayLabel = computed(() => {
   const d = app.selectedDisplay.value;
-  if (!d) return "未检测到显示器";
+  if (!d) {
+    // 选中的是不在线的显示器（右侧状态列表仍可选中它来解除占用）：不能显示成空白下拉
+    return app.selectedDisplayId.value ? "该显示器已断开" : "未检测到显示器";
+  }
   const res = boundsText(d);
-  const tags = [d.primary ? "主显示器" : null, d.mirrored ? "镜像" : null]
+  const tags = [
+    d.primary ? "主" : null,
+    d.mirrored ? "镜像" : null,
+    d.temporary ? "临时 ID" : null,
+  ]
     .filter(Boolean)
     .join(" · ");
   return [d.name, res, tags].filter(Boolean).join("  ");
+});
+
+// 无 EDID 序列号时 ID 会随拔插变化，需明确告知用户配置可能无法自动恢复
+const displayTitle = computed(() => {
+  const d = app.selectedDisplay.value;
+  if (!d?.temporary) return displayLabel.value;
+  return `${displayLabel.value}\n该显示器未上报序列号，此 ID 仅在本次连接内有效：重新插拔后需要重新指定壁纸。`;
 });
 
 const displayCount = computed(() => app.displays.value.length);
@@ -54,28 +68,27 @@ async function clickImport() {
 
 <template>
   <header
-    class="flex h-11 shrink-0 items-center gap-2 border-b border-line bg-bg-2/80 px-3.5 backdrop-blur"
+    class="dw-toolbar flex h-12 shrink-0 items-center gap-2 px-3.5"
     data-tauri-drag-region
   >
-    <!-- 目录 -->
+    <!-- 目录：名称占位，完整路径放 tooltip -->
     <div class="flex min-w-0 flex-1 items-center gap-2">
-      <SvgIcon name="folder" :size="14" class="text-accent" />
-      <span class="shrink-0 text-[12px] text-faint">壁纸目录</span>
+      <span class="dw-toolbar-mark" aria-hidden="true">
+        <SvgIcon name="folder" :size="14" class="text-accent" />
+      </span>
       <span
-        class="min-w-0 truncate text-[12px] text-dim"
-        :title="app.libraryDir.value || '未选择'"
+        class="min-w-0 truncate text-[12px] text-tx"
+        :title="app.libraryDir.value || '未选择壁纸目录'"
         >{{ app.dirName.value }}</span
       >
     </div>
 
-    <!-- 操作 -->
-    <button class="mac-btn" title="选择壁纸目录" @click="app.pickFolder()">
-      <SvgIcon name="folder" :size="12" />
-      选择文件夹
+    <!-- 操作：窄窗口下收敛为图标按钮，靠 tooltip 说明 -->
+    <button class="mac-btn !px-1.5" title="选择壁纸存放文件夹" @click="app.pickFolder()">
+      <SvgIcon name="folder" :size="14" />
     </button>
-    <button class="mac-btn" title="导入图片或视频" @click="clickImport">
-      <SvgIcon name="import" :size="12" />
-      导入文件
+    <button class="mac-btn !px-1.5" title="导入图片或视频" @click="clickImport">
+      <SvgIcon name="import" :size="14" />
     </button>
     <button
       class="mac-btn !px-1.5"
@@ -90,7 +103,7 @@ async function clickImport() {
       />
     </button>
 
-    <span v-if="displayCount" class="mx-1 h-5 w-px shrink-0 bg-line"></span>
+    <span v-if="displayCount" class="dw-toolbar-divider mx-1 h-5 w-px shrink-0"></span>
 
     <!-- 显示器选择 -->
     <label class="flex min-w-0 items-center gap-1.5">
@@ -98,12 +111,19 @@ async function clickImport() {
       <select
         class="mac-select"
         :value="app.selectedDisplayId.value"
-        :title="displayLabel"
+        :title="displayTitle"
         :disabled="!displayCount"
         @change="app.selectDisplay(($event.target as HTMLSelectElement).value)"
       >
+        <option
+          v-if="app.selectedDisplayId.value && !app.selectedDisplay.value"
+          :value="app.selectedDisplayId.value"
+          disabled
+        >
+          {{ displayLabel }}
+        </option>
         <option v-for="d in app.displays.value" :key="d.id" :value="d.id">
-          {{ d.name }}{{ d.primary ? "（主）" : "" }} {{ boundsText(d) }}
+          {{ d.name }}{{ d.primary ? "（主）" : "" }}{{ d.temporary ? "（临时）" : "" }} {{ boundsText(d) }}
         </option>
       </select>
     </label>
