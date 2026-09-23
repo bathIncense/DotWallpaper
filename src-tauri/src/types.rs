@@ -1,4 +1,4 @@
-// 前后端共享的数据结构（改造计划 §2.1）
+// 前后端共享的数据结构
 
 use serde::{Deserialize, Serialize};
 
@@ -60,15 +60,18 @@ pub struct DisplayWallpaperState {
 }
 
 /// 显示器信息
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct DisplayInfo {
     pub id: String,
     pub name: String,
     pub logical_bounds: (f64, f64, f64, f64),
+    pub pixel_width: u32,
+    pub pixel_height: u32,
     pub scale_factor: f64,
     pub primary: bool,
     pub mirrored: bool,
+    pub temporary: bool,
 }
 
 /// 媒体库条目
@@ -79,4 +82,24 @@ pub struct MediaItem {
     pub name: String,
     pub kind: MediaKind,
     pub thumb: String,
+    pub mtime: i64,
+}
+
+/// 设置更新载荷。库目录不属于此结构，目录只能由原生选择器修改。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FrontendSettings {
+    pub default_fit_mode: FitMode,
+    pub default_muted: bool,
+}
+
+/// 前端启动时使用的完整应用快照。
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AppSnapshot {
+    pub library_dir: String,
+    pub default_fit_mode: FitMode,
+    pub default_muted: bool,
+    pub displays: Vec<DisplayInfo>,
+    pub states: Vec<DisplayWallpaperState>,
 }

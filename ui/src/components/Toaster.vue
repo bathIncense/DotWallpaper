@@ -24,7 +24,7 @@ function iconKind(kind: string): "check" | "close" {
         <div
           v-for="t in app.toasts.value"
           :key="t.id"
-          class="pointer-events-auto flex max-w-[520px] items-center gap-2 rounded-lg border bg-[rgba(40,40,45,0.94)] px-3 py-1.5 text-[12px] shadow-[0_10px_30px_rgba(0,0,0,0.45)] backdrop-blur-xl"
+          class="pointer-events-auto flex max-w-[520px] items-center gap-2 rounded-lg border bg-panel/95 px-3 py-1.5 text-[12px] shadow-[0_10px_30px_var(--color-drop)] backdrop-blur-xl"
           :class="toneClass(t.kind)"
         >
           <SvgIcon :name="iconKind(t.kind)" :size="13" />

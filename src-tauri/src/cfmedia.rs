@@ -37,18 +37,20 @@ extern "C" {
     static kCFBooleanTrue: CFTypeRef;
 
     fn CGImageSourceCreateWithURL(imageURL: CFTypeRef, options: CFTypeRef) -> *mut c_void;
-    fn CGImageSourceCreateImageAtIndex(
+    fn CGImageSourceCopyPropertiesAtIndex(
         src: CFTypeRef,
         index: usize,
         options: CFTypeRef,
     ) -> *mut c_void;
+    fn CFDictionaryGetValue(dict: CFTypeRef, key: CFTypeRef) -> *const c_void;
+    fn CFNumberGetValue(number: CFTypeRef, theType: u32, valuePtr: *mut c_void) -> u8;
+    fn CFGetTypeID(cf: CFTypeRef) -> usize;
+    fn CFNumberGetTypeID() -> usize;
     fn CGImageSourceCreateThumbnailAtIndex(
         src: CFTypeRef,
         index: usize,
         options: CFTypeRef,
     ) -> *mut c_void;
-    fn CGImageGetWidth(image: CFTypeRef) -> usize;
-    fn CGImageGetHeight(image: CFTypeRef) -> usize;
     fn CGImageDestinationCreateWithURL(
         url: CFTypeRef,
         type_: CFTypeRef,
@@ -68,7 +70,12 @@ fn c_string(s: &str) -> *mut c_void {
 fn url_for(path: &str) -> *mut c_void {
     let s = c_string(path);
     let url = unsafe {
-        CFURLCreateWithFileSystemPath(std::ptr::null(), s as *const c_void, kCFURLPOSIXPathStyle, false)
+        CFURLCreateWithFileSystemPath(
+            std::ptr::null(),
+            s as *const c_void,
+            kCFURLPOSIXPathStyle,
+            false,
+        )
     };
     unsafe { CFRelease(s) };
     url
@@ -94,11 +101,23 @@ fn dictionary(pairs: &[(&str, *const c_void)]) -> *mut c_void {
 }
 
 fn number_f64(v: f64) -> *mut c_void {
-    unsafe { CFNumberCreate(std::ptr::null(), kCFNumberFloat64Type, &v as *const _ as *const c_void) }
+    unsafe {
+        CFNumberCreate(
+            std::ptr::null(),
+            kCFNumberFloat64Type,
+            &v as *const _ as *const c_void,
+        )
+    }
 }
 
-/// 读取图片像素尺寸（不解码全图）。
+/// 只读文件属性拿像素尺寸，不解码位图。
+///
+/// 这里曾经用 `CGImageSourceCreateImageAtIndex` 取 `CGImageGetWidth`——那会把整幅图解码一遍
+/// 只为问一个尺寸，于是每张稍大的图都要「全解码 + 再生成缩略图」两次，直接顶到
+/// 「约 1000 张首屏 ≤ 2s」这条验收上。属性里的宽高不含 EXIF 旋转，但唯一调用方
+/// （`thumbs.rs` 判断是否小图）用的是 `max(w, h)`，旋转与否不影响结论。
 pub fn image_size(path: &str) -> Option<(usize, usize)> {
+    const K_CF_NUMBER_SINT64_TYPE: u32 = 4;
     unsafe {
         let url = url_for(path);
         let src = CGImageSourceCreateWithURL(url as *const c_void, std::ptr::null());
@@ -106,36 +125,67 @@ pub fn image_size(path: &str) -> Option<(usize, usize)> {
         if src.is_null() {
             return None;
         }
-        let img = CGImageSourceCreateImageAtIndex(src as *const c_void, 0, std::ptr::null());
-        let size = if img.is_null() {
-            None
-        } else {
-            Some((CGImageGetWidth(img as *const c_void), CGImageGetHeight(img as *const c_void)))
-        };
-        if !img.is_null() {
-            CFRelease(img);
-        }
+        let props = CGImageSourceCopyPropertiesAtIndex(src as *const c_void, 0, std::ptr::null());
         CFRelease(src);
+        if props.is_null() {
+            return None;
+        }
+        // 属性字典的键就是这些常量字符串本身（kCGImagePropertyPixelWidth == "PixelWidth"），
+        // 按 CFEqual 值比较命中；取到的是借用指针，不能释放。
+        let read_dim = |key: &str| -> Option<usize> {
+            let k = c_string(key);
+            let v = CFDictionaryGetValue(props as *const c_void, k as *const c_void);
+            CFRelease(k);
+            if v.is_null() || CFGetTypeID(v) != CFNumberGetTypeID() {
+                return None;
+            }
+            let mut n: i64 = 0;
+            if CFNumberGetValue(v, K_CF_NUMBER_SINT64_TYPE, &mut n as *mut _ as *mut c_void) == 0 {
+                return None;
+            }
+            (n > 0).then_some(n as usize)
+        };
+        let size = match (read_dim("PixelWidth"), read_dim("PixelHeight")) {
+            (Some(w), Some(h)) => Some((w, h)),
+            _ => None,
+        };
+        CFRelease(props);
         size
     }
 }
 
 /// 将 CGImage（不透明指针）编码为 JPEG 文件。
-pub fn encode_jpeg(cg_image: *const c_void, dst_path: &str, quality: f64) -> Result<(), String> {
+///
+/// # Safety
+/// `cg_image` must be a valid, retained `CGImageRef` pointer for the duration
+/// of this call.
+pub unsafe fn encode_jpeg(
+    cg_image: *const c_void,
+    dst_path: &str,
+    quality: f64,
+) -> Result<(), String> {
     if cg_image.is_null() {
         return Err("CGImage 为空".to_string());
     }
     unsafe {
         let url = url_for(dst_path);
         let kind = c_string("public.jpeg");
-        let dst = CGImageDestinationCreateWithURL(url as *const c_void, kind as *const c_void, 1, std::ptr::null());
+        let dst = CGImageDestinationCreateWithURL(
+            url as *const c_void,
+            kind as *const c_void,
+            1,
+            std::ptr::null(),
+        );
         CFRelease(url);
         CFRelease(kind);
         if dst.is_null() {
             return Err("无法创建 JPEG 编码目标".to_string());
         }
         let q = number_f64(quality);
-        let props = dictionary(&[("kCGImageDestinationLossyCompressionQuality", q as *const c_void)]);
+        let props = dictionary(&[(
+            "kCGImageDestinationLossyCompressionQuality",
+            q as *const c_void,
+        )]);
         CFRelease(q);
         CGImageDestinationAddImage(dst as *const c_void, cg_image, props as *const c_void);
         if !props.is_null() {
@@ -159,22 +209,23 @@ pub fn make_thumbnail_jpeg(src_path: &str, dst_path: &str, max_px: u32) -> Resul
         if src.is_null() {
             return Err("ImageIO 无法读取图片".to_string());
         }
-        let k_always = c_string("kCGImageSourceCreateThumbnailFromImageAlways");
-        let k_transform = c_string("kCGImageSourceCreateThumbnailWithTransform");
-        let k_max = c_string("kCGImageSourceThumbnailMaxPixelSize");
+        // 键由 `dictionary` 从 `&str` 现场构造，这里不再自己建一遍 CFString
         let max_num = number_f64(max_px as f64);
         let opts = dictionary(&[
-            ("kCGImageSourceCreateThumbnailFromImageAlways", kCFBooleanTrue),
+            (
+                "kCGImageSourceCreateThumbnailFromImageAlways",
+                kCFBooleanTrue,
+            ),
             ("kCGImageSourceCreateThumbnailWithTransform", kCFBooleanTrue),
-            ("kCGImageSourceThumbnailMaxPixelSize", max_num as *const c_void),
+            (
+                "kCGImageSourceThumbnailMaxPixelSize",
+                max_num as *const c_void,
+            ),
         ]);
         let thumb =
             CGImageSourceCreateThumbnailAtIndex(src as *const c_void, 0, opts as *const c_void);
         CFRelease(opts);
         CFRelease(max_num);
-        CFRelease(k_always);
-        CFRelease(k_transform);
-        CFRelease(k_max);
         if thumb.is_null() {
             CFRelease(src);
             return Err("缩略图生成失败".to_string());

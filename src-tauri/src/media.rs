@@ -3,9 +3,6 @@
 
 use std::path::{Path, PathBuf};
 
-use tauri::Manager;
-
-use crate::runtime;
 use crate::settings;
 use crate::types::MediaKind;
 
@@ -13,9 +10,15 @@ const SUPPORTED_IMAGE_EXTS: [&str; 6] = ["jpg", "jpeg", "png", "bmp", "webp", "h
 const SUPPORTED_VIDEO_EXTS: [&str; 2] = ["mp4", "mov"];
 
 pub fn kind_of_ext(ext: &str) -> Option<MediaKind> {
-    if SUPPORTED_IMAGE_EXTS.iter().any(|s| s.eq_ignore_ascii_case(ext)) {
+    if SUPPORTED_IMAGE_EXTS
+        .iter()
+        .any(|s| s.eq_ignore_ascii_case(ext))
+    {
         Some(MediaKind::Image)
-    } else if SUPPORTED_VIDEO_EXTS.iter().any(|s| s.eq_ignore_ascii_case(ext)) {
+    } else if SUPPORTED_VIDEO_EXTS
+        .iter()
+        .any(|s| s.eq_ignore_ascii_case(ext))
+    {
         Some(MediaKind::Video)
     } else {
         None
@@ -71,29 +74,57 @@ pub fn validate_for_apply(path: &str, declared: MediaKind) -> Result<String, Str
 }
 
 /// 扫描目录（递归），返回 (绝对路径, 类型) 列表。
-pub fn scan(dir: &str) -> Vec<(String, MediaKind)> {
+pub fn scan(dir: &str) -> Result<Vec<(String, MediaKind)>, String> {
+    let trimmed = dir.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let root = PathBuf::from(trimmed);
+    if !root.exists() {
+        return Err(format!("壁纸目录不存在或已被移动: {trimmed}"));
+    }
+    if !root.is_dir() {
+        return Err(format!("壁纸目录不是文件夹: {trimmed}"));
+    }
+    let root = root
+        .canonicalize()
+        .map_err(|e| format!("壁纸目录无法解析: {trimmed}: {e}"))?;
     let mut out = Vec::new();
-    let Some(root) = canonical_dir(dir) else {
-        return out;
-    };
     let mut stack = vec![root];
+    let mut is_root = true;
     while let Some(current) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&current) else {
-            continue;
+        let at_root = is_root;
+        is_root = false;
+        let entries = match std::fs::read_dir(&current) {
+            Ok(entries) => entries,
+            Err(e) => {
+                if at_root {
+                    return Err(format!("无法读取壁纸目录 {}: {e}", current.display()));
+                }
+                continue;
+            }
         };
         for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
             let path = entry.path();
-            if path.is_dir() {
+            if file_type.is_dir() {
                 stack.push(path);
-            } else if classify(&path).is_some() {
-                if let Some(s) = path.to_str() {
-                    out.push((s.to_string(), classify(&path).unwrap()));
+            } else if file_type.is_file() {
+                if let Some(kind) = classify(&path) {
+                    if let Some(s) = path.to_str() {
+                        out.push((s.to_string(), kind));
+                    }
                 }
             }
         }
     }
-    out.sort_by(|a, b| a.0.cmp(&b.0));
-    out
+    out.sort_by(|a, b| {
+        let (ka, kb) = (a.0.to_lowercase(), b.0.to_lowercase());
+        ka.cmp(&kb).then_with(|| a.0.cmp(&b.0))
+    });
+    Ok(out)
 }
 
 /// 导入拖入/选择的文件到壁纸目录：重名自动加序号，未支持格式进 skipped。
@@ -102,7 +133,10 @@ pub fn import(paths: &[String]) -> (Vec<String>, Vec<String>) {
     let Some(save_dir) = library else {
         return (
             Vec::new(),
-            paths.iter().map(|p| format!("{p}: 壁纸目录不可用")).collect(),
+            paths
+                .iter()
+                .map(|p| format!("{p}: 壁纸目录不可用"))
+                .collect(),
         );
     };
 
@@ -120,13 +154,19 @@ pub fn import(paths: &[String]) -> (Vec<String>, Vec<String>) {
             skipped.push(format!("{}: 不是文件", src.display()));
             continue;
         }
-        let Some(kind) = classify(&src) else {
-            skipped.push(format!("{}: 不支持的格式", src.file_name().unwrap_or_default().to_string_lossy()));
+        if classify(&src).is_none() {
+            skipped.push(format!(
+                "{}: 不支持的格式",
+                src.file_name().unwrap_or_default().to_string_lossy()
+            ));
             continue;
-        };
-        let name = src.file_name().unwrap_or_default().to_string_lossy().to_string();
+        }
+        let name = src
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         let ext = name.rsplit('.').next().unwrap_or_default();
-        let _ = kind;
         let mut dest = save_dir.join(&name);
         let mut idx = 1u32;
         while dest.exists() {
@@ -157,18 +197,24 @@ pub fn delete(path: &str) -> Result<(), String> {
     if classify(&canon).is_none() {
         return Err("不支持的媒体文件类型".to_string());
     }
+    let canon_str = canon.to_string_lossy().to_string();
+    if crate::engine::is_path_in_use(&canon_str) {
+        return Err("该文件正被某块显示器用作壁纸，请先停止或切换后再删除".to_string());
+    }
+    if crate::engine::is_path_displayed(&canon_str) {
+        return Err("该文件仍是某块显示器当前展示的壁纸内容（视频停止后桌面留的是它的首帧海报，删文件会连海报一起清掉），请先在该显示器换用其他壁纸；若显示器已拔出，右侧状态里的「解除占用」就是停用".to_string());
+    }
+    let used_by_assignment = settings::get().assignments.values().any(|a| {
+        PathBuf::from(&a.path)
+            .canonicalize()
+            .is_ok_and(|p| p == canon)
+    });
+    if used_by_assignment {
+        return Err("该文件仍是某块显示器记住的壁纸配置，请先在该显示器换用其他壁纸（或点「解除占用」）后再删除".to_string());
+    }
     std::fs::remove_file(&canon).map_err(|e| format!("删除失败: {e}"))?;
     if let Ok(cache) = crate::thumbs::cache_dir() {
         crate::thumbs::delete_thumb(&canon.to_string_lossy(), &cache);
     }
     Ok(())
-}
-
-/// 将目录加入 asset protocol scope，使前端 convertFileSrc 可加载。
-pub fn ensure_asset_scope(dir: &Path) {
-    if let Ok(app) = runtime::app() {
-        if let Err(e) = app.asset_protocol_scope().allow_directory(dir, true) {
-            eprintln!("[warn] asset scope 添加失败 {}: {e}", dir.display());
-        }
-    }
 }

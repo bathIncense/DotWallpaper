@@ -6,9 +6,11 @@ import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// DotWallpaper UI - Vue 3 + Vite 5（独立于根目录的 Tauri 前端工程）
-// devUrl 固定端口 1420，与 src-tauri/tauri.conf.json 保持一致
+// DotWallpaper UI - Vue 3 + Vite 5（由原生 WKWebView 承载）
+// 开发服务器固定端口，便于浏览器调试；发布构建使用内联 file:// 资源
 export default defineConfig({
+  // WKWebView loads the bundle from file://; assets must be relative.
+  base: "./",
   plugins: [vue(), tailwindcss()],
   resolve: {
     alias: {

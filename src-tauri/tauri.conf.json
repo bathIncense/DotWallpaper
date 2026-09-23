@@ -21,7 +21,8 @@
         "center": true,
         "resizable": true,
         "decorations": true,
-        "transparent": false
+        "transparent": false,
+        "visible": false
       }
     ],
     "security": {
@@ -29,12 +30,8 @@
       "assetProtocol": {
         "enable": true,
         "scope": [
-          "$HOME/Pictures/**",
-          "$PICTURE/**",
           "$RESOURCE/**",
-          "$APPCACHE/thumbnails/**",
-          "/System/Library/Desktop Pictures/**",
-          "/Library/Desktop Pictures/**"
+          "$APPCACHE/thumbnails/**"
         ]
       }
     }

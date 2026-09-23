@@ -1,13 +1,17 @@
 // macOS 视频壁纸引擎。
 // - 每块显示器一个 PlaybackSession，仅在 macOS 主线程访问（thread_local 持有全部对象）
 // - AVQueuePlayer + AVPlayerLooper + AVPlayerLayer 共同存活，窗口位于桌面图标之下
-// - 先准备新会话（隐藏），首帧就绪后替换旧会话；失败保留旧壁纸并返回明确错误
+// - 事务式切换：新会话先候补（隐藏），首帧就绪后才替换旧会话并把海报落为系统壁纸；
+//   失败/超时只销毁候补会话，旧会话与旧系统壁纸原样保留
+// - 每显示器维护 generation 计数：apply/stop/断开均递增，过期候补的 watcher 自动作废，
+//   杜绝快速连续切换时旧 watcher 提交新会话
 // - 显示器热插拔 / 休眠唤醒由监视线程处理，操作一律投递回主线程
+// - 所有状态变化经 publish() 写入镜像并通过回调通知上层
 
 use std::cell::RefCell;
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Mutex;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use objc2::rc::Retained;
@@ -25,11 +29,23 @@ use objc2_foundation::MainThreadMarker;
 use crate::desktop;
 use crate::displays;
 use crate::media;
-use crate::runtime::{on_main, spawn_main};
+use crate::runtime::on_main;
 use crate::settings;
 use crate::types::{
     ControlAction, DisplayWallpaperState, FitMode, MediaKind, Phase, WallpaperAssignment,
 };
+
+/// 状态变化回调类型
+pub type StateCallback = extern "C" fn(*const std::ffi::c_char);
+
+/// 全局状态回调
+static STATE_CB: OnceLock<Mutex<Option<StateCallback>>> = OnceLock::new();
+
+/// 注册状态变化回调
+pub fn set_state_callback(cb: StateCallback) {
+    let mut guard = STATE_CB.get_or_init(|| Mutex::new(None)).lock().unwrap();
+    *guard = Some(cb);
+}
 
 /// 一个显示器的完整播放会话（播放器、循环器、图层共同存活）
 struct Session {
@@ -44,23 +60,62 @@ struct Session {
     sleep_paused: bool,
 }
 
+/// 候补会话（首帧就绪前的隐藏窗口），携带创建时的 generation 用于过期判定
+struct StagedSession {
+    generation: u64,
+    session: Session,
+}
+
 thread_local! {
     /// 当前正在展示的会话
     static SESSIONS: RefCell<HashMap<String, Session>> = RefCell::new(HashMap::new());
     /// 首帧就绪前的候补会话（隐藏窗口）
-    static STAGED: RefCell<HashMap<String, Session>> = RefCell::new(HashMap::new());
+    static STAGED: RefCell<HashMap<String, StagedSession>> = RefCell::new(HashMap::new());
 }
 
-/// 任意线程可读的最新状态镜像（主线程写入）
+/// 每显示器代数计数：任何"接管意图"（新 apply / stop / 断开销毁）都递增，
+/// 候补 watcher 提交前校验自己创建时的代数，过期即自我销毁，防止旧任务覆盖新会话
+fn generations() -> &'static Mutex<HashMap<String, u64>> {
+    static GENS: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
+    GENS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn bump_generation(display_id: &str) -> u64 {
+    let mut map = generations().lock().unwrap_or_else(|e| e.into_inner());
+    let g = map.entry(display_id.to_string()).or_insert(0);
+    *g += 1;
+    *g
+}
+
+fn current_generation(display_id: &str) -> u64 {
+    generations()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(display_id)
+        .copied()
+        .unwrap_or(0)
+}
+
+/// 任意线程可读的最新状态镜像（主线程逻辑写入）
 fn states() -> &'static Mutex<HashMap<String, DisplayWallpaperState>> {
-    static STATES: std::sync::OnceLock<Mutex<HashMap<String, DisplayWallpaperState>>> =
-        std::sync::OnceLock::new();
+    static STATES: OnceLock<Mutex<HashMap<String, DisplayWallpaperState>>> = OnceLock::new();
     STATES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// 写入状态镜像并通过回调通知上层（任意线程可调）
 fn publish(state: &DisplayWallpaperState) {
     if let Ok(mut map) = states().lock() {
         map.insert(state.display_id.clone(), state.clone());
+    }
+    // 通过 C 回调通知上层
+    if let Some(guard) = STATE_CB.get() {
+        if let Ok(cb_guard) = guard.lock() {
+            if let Some(cb) = *cb_guard {
+                let json = serde_json::to_string(state).unwrap_or_default();
+                let c_str = std::ffi::CString::new(json).unwrap_or_default();
+                cb(c_str.as_ptr());
+            }
+        }
     }
 }
 
@@ -77,7 +132,24 @@ fn state_of(
     assignment: Option<WallpaperAssignment>,
     error: Option<String>,
 ) -> DisplayWallpaperState {
-    DisplayWallpaperState { display_id: display_id.to_string(), phase, assignment, error }
+    DisplayWallpaperState {
+        display_id: display_id.to_string(),
+        phase,
+        assignment,
+        error,
+    }
+}
+
+/// 状态镜像里是否仍把该文件当作某台显示器**当前展示**的内容。
+pub fn is_path_displayed(path: &str) -> bool {
+    states()
+        .lock()
+        .map(|m| {
+            m.values()
+                .filter_map(|s| s.assignment.as_ref())
+                .any(|a| same_path(&a.path, path))
+        })
+        .unwrap_or(true)
 }
 
 fn same_path(a: &str, b: &str) -> bool {
@@ -94,28 +166,39 @@ pub fn poster_path(video: &str) -> PathBuf {
 
 #[allow(deprecated)]
 /// 用 AVAssetImageGenerator 抽取首帧并编码为 JPEG（主线程调用）。
-pub fn generate_poster(video: &str, out: &PathBuf) -> Result<(), String> {
+pub fn generate_poster(video: &str, out: &Path) -> Result<(), String> {
     let _mtm = MainThreadMarker::new().ok_or("海报生成必须在主线程")?;
     let url = desktop::ns_url_for_path(video);
     let asset = unsafe { AVAsset::assetWithURL(&url) };
-    let gen: Retained<AVAssetImageGenerator> = unsafe {
-        objc2::msg_send![objc2::class!(AVAssetImageGenerator), imageGeneratorWithAsset: &*asset]
-    };
+    let gen = unsafe { AVAssetImageGenerator::assetImageGeneratorWithAsset(&asset) };
     unsafe { gen.setAppliesPreferredTrackTransform(true) };
     let time = unsafe { CMTime::new(0, 600) };
     let mut actual = unsafe { std::mem::zeroed() };
-    let image = unsafe {
-        gen.copyCGImageAtTime_actualTime_error(time, &mut actual)
-    }
-    .map_err(|e| format!("无法提取视频首帧: {e}"))?;
+    let image = unsafe { gen.copyCGImageAtTime_actualTime_error(time, &mut actual) }
+        .map_err(|e| format!("无法提取视频首帧: {e}"))?;
     if let Some(parent) = out.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    crate::cfmedia::encode_jpeg(
-        &*image as *const _ as *const _,
-        &out.to_string_lossy(),
-        0.9,
-    )
+    unsafe {
+        crate::cfmedia::encode_jpeg(&*image as *const _ as *const _, &out.to_string_lossy(), 0.9)
+    }
+}
+
+/// 该路径是否正被某块显示器的播放会话（含候补）使用。
+pub fn is_path_in_use(path: &str) -> bool {
+    let target = path.to_string();
+    on_main(move |_mtm| {
+        SESSIONS.with(|s| {
+            s.borrow()
+                .values()
+                .any(|x| same_path(&x.assignment.path, &target))
+        }) || STAGED.with(|s| {
+            s.borrow()
+                .values()
+                .any(|x| same_path(&x.session.assignment.path, &target))
+        })
+    })
+    .unwrap_or(false)
 }
 
 /// 统一应用入口（任意线程调用，内部调度到主线程）。
@@ -123,7 +206,6 @@ pub fn apply(assignment: WallpaperAssignment) -> Result<DisplayWallpaperState, S
     let path = media::validate_for_apply(&assignment.path, assignment.kind)?;
     let assignment = WallpaperAssignment { path, ..assignment };
 
-    // 幂等：同显示器同分配且已生效时不重复应用
     {
         let guard = states().lock().map_err(|e| e.to_string())?;
         if let Some(s) = guard.get(&assignment.display_id) {
@@ -138,14 +220,17 @@ pub fn apply(assignment: WallpaperAssignment) -> Result<DisplayWallpaperState, S
     let state = match assignment.kind {
         MediaKind::Image => on_main(move |mtm| apply_static_main(mtm, &a))?,
         MediaKind::Video => {
-            let state = on_main(move |mtm| start_video_main(mtm, &a))?;
-            spawn_prepare_watch(assignment.display_id.clone());
-            state
+            let (state, gen) = on_main(move |mtm| start_video_main(mtm, &a))??;
+            if state.phase == Phase::Preparing {
+                spawn_prepare_watch(assignment.display_id.clone(), gen);
+            }
+            Ok(state)
         }
     }?;
 
     publish(&state);
-    if state.phase != Phase::Error {
+    clear_failure(&assignment.display_id, &assignment.path);
+    if state.phase == Phase::Static {
         settings::record_assignment(&state.assignment.clone().unwrap_or(assignment));
     }
     Ok(state)
@@ -157,40 +242,59 @@ fn apply_static_main(
 ) -> Result<DisplayWallpaperState, String> {
     let screen = desktop::screen_for_stable_id(mtm, &a.display_id)
         .ok_or_else(|| format!("未找到显示器: {}", a.display_id))?;
-    // 切静态前必须先停掉该显示器的视频会话
-    destroy_sessions_for(mtm, &a.display_id);
     desktop::set_static_wallpaper(mtm, &screen, &a.path, a.fit_mode)?;
-    // 以系统读取结果作为最终状态
-    match desktop::current_static_wallpaper(mtm, &screen) {
-        Some(read) if !read.is_empty() && !same_path(&read, &a.path) => Err(format!(
-            "系统壁纸未生效（当前: {read}）"
-        )),
-        _ => Ok(state_of(&a.display_id, Phase::Static, Some(a.clone()), None)),
+    if let Some(read) = desktop::current_static_wallpaper(mtm, &screen) {
+        if !read.is_empty() && !same_path(&read, &a.path) {
+            eprintln!(
+                "[wallpaper] 系统已接受壁纸设置，等待异步刷新（当前回读: {read}，目标: {}）",
+                a.path
+            );
+        }
     }
+    destroy_sessions_for(mtm, &a.display_id);
+    Ok(state_of(
+        &a.display_id,
+        Phase::Static,
+        Some(a.clone()),
+        None,
+    ))
 }
 
 fn start_video_main(
     mtm: &MainThreadMarker,
     a: &WallpaperAssignment,
-) -> Result<DisplayWallpaperState, String> {
+) -> Result<(DisplayWallpaperState, u64), String> {
     let screen = desktop::screen_for_stable_id(mtm, &a.display_id)
         .ok_or_else(|| format!("未找到显示器: {}", a.display_id))?;
 
-    // 首帧海报设为该屏系统静态壁纸：播放启动前避免黑屏，停止后仍保留合理背景
-    let poster = poster_path(&a.path);
-    match generate_poster(&a.path, &poster) {
-        Ok(()) => {
-            if let Err(e) = desktop::set_static_wallpaper(mtm, &screen, &poster.to_string_lossy(), FitMode::Fill) {
-                eprintln!("[poster] 设置海报壁纸失败: {e}");
-            }
-        }
-        Err(e) => eprintln!("[poster] {e}"),
-    }
+    let gen = bump_generation(&a.display_id);
+    drop_staged(&a.display_id);
 
-    let session = build_session(a, &screen)?;
-    // 候补会话先隐藏，首帧就绪后再替换旧会话
-    STAGED.with(|s| s.borrow_mut().insert(a.display_id.clone(), session));
-    Ok(state_of(&a.display_id, Phase::Preparing, Some(a.clone()), None))
+    let session = match build_session(a, &screen) {
+        Ok(s) => s,
+        Err(e) => {
+            let live = live_state(&a.display_id);
+            return match live {
+                Some(s) if s.phase == Phase::Playing || s.phase == Phase::Paused => {
+                    Err(format!("{e}（已保留原壁纸）"))
+                }
+                _ => Err(e),
+            };
+        }
+    };
+    STAGED.with(|s| {
+        s.borrow_mut().insert(
+            a.display_id.clone(),
+            StagedSession {
+                generation: gen,
+                session,
+            },
+        )
+    });
+    Ok((
+        state_of(&a.display_id, Phase::Preparing, Some(a.clone()), None),
+        gen,
+    ))
 }
 
 fn build_session(
@@ -211,13 +315,11 @@ fn build_session(
 
     let url = desktop::ns_url_for_path(&a.path);
     let asset = unsafe { AVAsset::assetWithURL(&url) };
-    let item: Retained<AVPlayerItem> = unsafe {
-        objc2::msg_send![objc2::class!(AVPlayerItem), playerItemWithAsset: &*asset]
-    };
+    let item: Retained<AVPlayerItem> =
+        unsafe { objc2::msg_send![objc2::class!(AVPlayerItem), playerItemWithAsset: &*asset] };
     let items = objc2_foundation::NSArray::from_slice(std::slice::from_ref(&&*item));
-    let player: Retained<AVQueuePlayer> = unsafe {
-        objc2::msg_send![objc2::class!(AVQueuePlayer), queuePlayerWithItems: &*items]
-    };
+    let player: Retained<AVQueuePlayer> =
+        unsafe { objc2::msg_send![objc2::class!(AVQueuePlayer), queuePlayerWithItems: &*items] };
     let looper = unsafe { AVPlayerLooper::playerLooperWithPlayer_templateItem(&player, &item) };
     let layer = unsafe { AVPlayerLayer::playerLayerWithPlayer(Some(&player)) };
     unsafe {
@@ -228,7 +330,7 @@ fn build_session(
                 .expect("AVLayerVideoGravityResizeAspect"),
         };
         layer.setVideoGravity(gravity);
-        player.setMuted(a.muted);
+        player.setMuted(true);
     }
     if let Some(view) = window.contentView() {
         view.setWantsLayer(true);
@@ -251,13 +353,10 @@ fn build_session(
 }
 
 fn configure_window(window: &NSWindow, frame: objc2_foundation::NSRect) {
-    unsafe {
-        // 桌面图标之下、系统桌面背景之上；不假定主屏原点为 (0,0)
-        let level = objc2_core_graphics::CGWindowLevelForKey(
-            objc2_core_graphics::CGWindowLevelKey::DesktopIconWindowLevelKey,
-        );
-        window.setLevel((level - 1) as isize);
-    }
+    let level = objc2_core_graphics::CGWindowLevelForKey(
+        objc2_core_graphics::CGWindowLevelKey::DesktopIconWindowLevelKey,
+    );
+    window.setLevel((level - 1) as isize);
     window.setCollectionBehavior(
         NSWindowCollectionBehavior::CanJoinAllSpaces
             | NSWindowCollectionBehavior::Stationary
@@ -271,7 +370,6 @@ fn configure_window(window: &NSWindow, frame: objc2_foundation::NSRect) {
     window.setCanHide(false);
     unsafe { window.setReleasedWhenClosed(false) };
     window.setFrame_display(frame, false);
-    // 注意：新会话先不 orderFront，首帧就绪后替换时再显示
 }
 
 fn close_session(session: &Session) {
@@ -281,12 +379,17 @@ fn close_session(session: &Session) {
     }
 }
 
-fn destroy_sessions_for(_mtm: &MainThreadMarker, display_id: &str) {
+fn drop_staged(display_id: &str) {
     STAGED.with(|s| {
-        if let Some(sess) = s.borrow_mut().remove(display_id) {
-            close_session(&sess);
+        if let Some(st) = s.borrow_mut().remove(display_id) {
+            close_session(&st.session);
         }
     });
+}
+
+fn destroy_sessions_for(_mtm: &MainThreadMarker, display_id: &str) {
+    bump_generation(display_id);
+    drop_staged(display_id);
     SESSIONS.with(|s| {
         if let Some(sess) = s.borrow_mut().remove(display_id) {
             close_session(&sess);
@@ -294,31 +397,56 @@ fn destroy_sessions_for(_mtm: &MainThreadMarker, display_id: &str) {
     });
 }
 
-/// 首帧就绪监视：就绪后替换旧会话并显示；失败/超时销毁候补、保留旧壁纸。
-fn spawn_prepare_watch(display_id: String) {
+fn live_state(display_id: &str) -> Option<DisplayWallpaperState> {
+    let mirror = states()
+        .lock()
+        .ok()
+        .and_then(|m| m.get(display_id).cloned());
+    let live = on_main({
+        let id = display_id.to_string();
+        move |_mtm| {
+            SESSIONS.with(|s| {
+                s.borrow()
+                    .get(&id)
+                    .map(|x| state_of(&id, x.phase, Some(x.assignment.clone()), None))
+            })
+        }
+    })
+    .ok()
+    .flatten();
+    live.or(mirror)
+}
+
+fn spawn_prepare_watch(display_id: String, generation: u64) {
     std::thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
             std::thread::sleep(Duration::from_millis(200));
             let id = display_id.clone();
-            let outcome = on_main(move |_mtm| watch_step(&id));
+            let outcome = on_main(move |mtm| watch_step(mtm, &id, generation));
             let done = match outcome {
                 Ok(WatchOutcome::Waiting) => {
                     if Instant::now() >= deadline {
-                        Some(fail_staged(&display_id, "播放器准备超时（文件可能缺失或系统无法解码）"))
+                        Some(fail_staged(
+                            &display_id,
+                            generation,
+                            "播放器准备超时（文件可能缺失或系统无法解码）",
+                        ))
                     } else {
                         None
                     }
                 }
                 Ok(WatchOutcome::Ready(state)) => Some(state),
-                Ok(WatchOutcome::Failed(msg)) => Some(fail_staged(&display_id, &msg)),
+                Ok(WatchOutcome::Failed(msg)) => Some(fail_staged(&display_id, generation, &msg)),
                 Ok(WatchOutcome::Gone) | Err(_) => return,
             };
             if let Some(state) = done {
-                publish(&state);
-                if state.phase == Phase::Playing {
-                    if let Some(a) = state.assignment.clone() {
-                        settings::record_assignment(&a);
+                if current_generation(&display_id) == generation {
+                    publish(&state);
+                    if state.phase == Phase::Playing {
+                        if let Some(a) = state.assignment.clone() {
+                            settings::record_assignment(&a);
+                        }
                     }
                 }
                 return;
@@ -334,59 +462,110 @@ enum WatchOutcome {
     Failed(String),
 }
 
-fn watch_step(display_id: &str) -> WatchOutcome {
-    let staged = STAGED.with(|s| s.borrow_mut().remove(display_id));
-    let Some(session) = staged else { return WatchOutcome::Gone };
-    let istatus = unsafe { session.item.status() };
+fn watch_step(mtm: &MainThreadMarker, display_id: &str, generation: u64) -> WatchOutcome {
+    let staged = STAGED.with(|s| {
+        let mut map = s.borrow_mut();
+        match map.get(display_id) {
+            Some(st) if st.generation != generation => None,
+            _ => map.remove(display_id),
+        }
+    });
+    let Some(st) = staged else {
+        return WatchOutcome::Gone;
+    };
+    let istatus = unsafe { st.session.item.status() };
     if istatus == AVPlayerItemStatus::Failed {
-        let msg = unsafe { session.item.error() }
+        let msg = unsafe { st.session.item.error() }
             .map(|e| format!("播放失败: {}", e.localizedDescription()))
             .unwrap_or_else(|| "播放器准备失败".to_string());
-        close_session(&session);
+        close_session(&st.session);
         return WatchOutcome::Failed(msg);
     }
-    let pstatus = unsafe { session.player.status() };
+    let pstatus = unsafe { st.session.player.status() };
     if istatus == AVPlayerItemStatus::ReadyToPlay && pstatus == AVPlayerStatus::ReadyToPlay {
-        // 首帧就绪：销毁旧会话，显示新会话
+        let mut session = st.session;
+        session.phase = Phase::Playing;
+        unsafe { session.player.setMuted(session.assignment.muted) };
+        session.window.orderFront(None::<&AnyObject>);
+        let assignment = session.assignment.clone();
         let old = SESSIONS.with(|s| s.borrow_mut().insert(display_id.to_string(), session));
         if let Some(old) = old {
             close_session(&old);
         }
-        SESSIONS.with(|s| {
-            if let Some(sess) = s.borrow_mut().get_mut(display_id) {
-                sess.phase = Phase::Playing;
-                unsafe { sess.window.orderFront(None::<&AnyObject>) };
+        if let Some(screen) = desktop::screen_for_stable_id(mtm, display_id) {
+            let video = assignment.path.clone();
+            let poster = poster_path(&video);
+            if !poster.is_file() {
+                if let Err(e) = generate_poster(&video, &poster) {
+                    eprintln!("[poster] {e}");
+                }
             }
-        });
-        let assignment = SESSIONS.with(|s| {
-            s.borrow().get(display_id).map(|x| x.assignment.clone())
-        });
-        return WatchOutcome::Ready(state_of(
-            display_id,
-            Phase::Playing,
-            assignment,
-            None,
-        ));
+            if poster.is_file() {
+                if let Err(e) = desktop::set_static_wallpaper(
+                    mtm,
+                    &screen,
+                    &poster.to_string_lossy(),
+                    FitMode::Fill,
+                ) {
+                    eprintln!("[poster] 设置海报壁纸失败: {e}");
+                }
+            }
+        }
+        return WatchOutcome::Ready(state_of(display_id, Phase::Playing, Some(assignment), None));
     }
-    // 尚未就绪，放回候补
-    STAGED.with(|s| s.borrow_mut().insert(display_id.to_string(), session));
+    STAGED.with(|s| {
+        s.borrow_mut().insert(
+            display_id.to_string(),
+            StagedSession {
+                generation,
+                session: st.session,
+            },
+        )
+    });
     WatchOutcome::Waiting
 }
 
-fn fail_staged(display_id: &str, msg: &str) -> DisplayWallpaperState {
+fn fail_staged(display_id: &str, generation: u64, msg: &str) -> DisplayWallpaperState {
     let err = msg.to_string();
     let id = display_id.to_string();
+    let g = generation;
     let _ = on_main(move |_mtm| {
-        if let Some(sess) = STAGED.with(|s| s.borrow_mut().remove(&id)) {
-            close_session(&sess);
+        let mine = STAGED.with(|s| {
+            let map = s.borrow();
+            match map.get(&id) {
+                Some(x) if x.generation == g => Some(x.session.assignment.path.clone()),
+                _ => None,
+            }
+        });
+        if let Some(path) = mine {
+            drop_staged(&id);
+            latch_failure(&id, &path);
         }
     });
-    let prev = states().lock().ok().and_then(|m| m.get(display_id).cloned());
+    if let Some(live) = live_state(display_id) {
+        if matches!(live.phase, Phase::Playing | Phase::Paused) {
+            return state_of(
+                display_id,
+                live.phase,
+                live.assignment,
+                Some(format!("视频无法播放，已保留原壁纸：{err}")),
+            );
+        }
+    }
+    let prev = states()
+        .lock()
+        .ok()
+        .and_then(|m| m.get(display_id).cloned());
     let assignment = prev
         .as_ref()
         .and_then(|s| s.assignment.clone())
         .or_else(|| settings::get().assignments.get(display_id).cloned());
-    state_of(display_id, Phase::Error, assignment, Some(format!("无法播放该视频：{err}")))
+    state_of(
+        display_id,
+        Phase::Error,
+        assignment,
+        Some(format!("无法播放该视频：{err}")),
+    )
 }
 
 /// 暂停 / 恢复 / 停止（全部调度到主线程操作播放器对象）
@@ -398,15 +577,25 @@ pub fn control(display_id: String, action: ControlAction) -> Result<DisplayWallp
         ControlAction::Resume => settings::set_display_paused(&state.display_id, false),
         ControlAction::Stop => {
             settings::set_display_paused(&state.display_id, false);
-            if let Some(a) = state.assignment.clone() {
-                settings::record_assignment(&a);
-            }
+            settings::forget_assignment(&state.display_id);
         }
     }
     Ok(state)
 }
 
 fn control_main(display_id: &str, action: ControlAction) -> Result<DisplayWallpaperState, String> {
+    if action == ControlAction::Stop {
+        let had_staged = STAGED.with(|s| s.borrow().contains_key(display_id));
+        if had_staged {
+            bump_generation(display_id);
+            drop_staged(display_id);
+        }
+    } else {
+        let preparing = STAGED.with(|s| s.borrow().contains_key(display_id));
+        if preparing {
+            return Err("动态壁纸正在准备中，请稍候再操作".to_string());
+        }
+    }
     SESSIONS.with(|cell| {
         let mut map = cell.borrow_mut();
         let Some(session) = map.get_mut(display_id) else {
@@ -420,9 +609,14 @@ fn control_main(display_id: &str, action: ControlAction) -> Result<DisplayWallpa
             ControlAction::Resume => unsafe { session.player.play() },
             ControlAction::Stop => {
                 let sess = map.remove(display_id).expect("just borrowed");
+                bump_generation(display_id);
                 close_session(&sess);
-                // 停止后系统壁纸仍是该视频的首帧海报
-                return Ok(state_of(display_id, Phase::Static, Some(sess.assignment), None));
+                return Ok(state_of(
+                    display_id,
+                    Phase::Static,
+                    Some(sess.assignment),
+                    None,
+                ));
             }
         }
         session.user_paused = action == ControlAction::Pause;
@@ -433,19 +627,37 @@ fn control_main(display_id: &str, action: ControlAction) -> Result<DisplayWallpa
             ControlAction::Pause => Phase::Paused,
             _ => Phase::Playing,
         };
-        Ok(state_of(display_id, session.phase, Some(session.assignment.clone()), None))
+        Ok(state_of(
+            display_id,
+            session.phase,
+            Some(session.assignment.clone()),
+            None,
+        ))
     })
 }
 
 fn bulk_control(action: ControlAction) {
-    spawn_main(move |_mtm| {
-        let ids = SESSIONS.with(|s| s.borrow().keys().cloned().collect::<Vec<_>>());
+    let _ = on_main(move |mtm| {
+        let mut ids: Vec<String> = SESSIONS.with(|s| s.borrow().keys().cloned().collect());
+        for k in STAGED.with(|s| s.borrow().keys().cloned().collect::<Vec<_>>()) {
+            if !ids.contains(&k) {
+                ids.push(k);
+            }
+        }
         for id in ids {
             if let Ok(state) = control_main(&id, action) {
                 publish(&state);
-                settings::set_display_paused(&id, action == ControlAction::Pause);
+                match action {
+                    ControlAction::Pause => settings::set_display_paused(&id, true),
+                    ControlAction::Resume => settings::set_display_paused(&id, false),
+                    ControlAction::Stop => {
+                        settings::set_display_paused(&id, false);
+                        settings::forget_assignment(&id);
+                    }
+                }
             }
         }
+        let _ = mtm;
     });
 }
 
@@ -461,15 +673,21 @@ pub fn stop_all() {
     bulk_control(ControlAction::Stop);
 }
 
-/// 退出时销毁全部播放会话（主线程调用）
-pub fn teardown_all() {
-    spawn_main(move |mtm| {
-        destroy_sessions_for(mtm, "");
-        let ids = SESSIONS.with(|s| s.borrow().keys().cloned().collect::<Vec<_>>());
+/// 退出时同步销毁全部播放会话（含候补）。
+pub fn teardown_all_sync() {
+    let _ = on_main(|mtm| {
+        let ids: Vec<String> = SESSIONS.with(|s| s.borrow().keys().cloned().collect());
         for id in ids {
             destroy_sessions_for(mtm, &id);
         }
+        let staged_ids: Vec<String> = STAGED.with(|s| s.borrow().keys().cloned().collect());
+        for id in staged_ids {
+            destroy_sessions_for(mtm, &id);
+        }
     });
+    if let Ok(mut m) = states().lock() {
+        m.clear();
+    }
 }
 
 /// 启动时恢复逐屏配置；缺失媒体标记错误，不阻塞其他显示器。
@@ -491,19 +709,15 @@ pub fn restore_on_startup() {
             }
             match apply(a.clone()) {
                 Ok(state) => {
-                    publish(&state);
                     if s.paused_displays.iter().any(|d| d == display_id)
                         && state.phase == Phase::Preparing
                     {
-                        // 就绪后按持久化状态暂停（watch 完成后短暂延迟控制）
                         let id = display_id.clone();
-                        std::thread::spawn(move || {
-                            std::thread::sleep(Duration::from_millis(2500));
-                            let _ = control(id, ControlAction::Pause);
-                        });
+                        std::thread::spawn(move || wait_then_pause(&id));
                     }
                 }
                 Err(e) => {
+                    latch_failure(display_id, &assignment.path);
                     publish(&state_of(display_id, Phase::Error, Some(a), Some(e)));
                 }
             }
@@ -511,22 +725,85 @@ pub fn restore_on_startup() {
     });
 }
 
+fn wait_then_pause(display_id: &str) {
+    for _ in 0..16 {
+        std::thread::sleep(Duration::from_millis(1000));
+        let phase = states()
+            .lock()
+            .ok()
+            .and_then(|m| m.get(display_id).map(|s| s.phase));
+        match phase {
+            Some(Phase::Playing) => {
+                let _ = control(display_id.to_string(), ControlAction::Pause);
+                return;
+            }
+            Some(Phase::Paused) | Some(Phase::Static) | Some(Phase::Error) | None => return,
+            Some(Phase::Preparing) => continue,
+        }
+    }
+}
+
+fn display_inflight(display_id: &str) -> bool {
+    let id = display_id.to_string();
+    on_main(move |_mtm| {
+        SESSIONS.with(|s| s.borrow().contains_key(&id))
+            || STAGED.with(|s| s.borrow().contains_key(&id))
+    })
+    .unwrap_or(false)
+}
+
+type DisplaySeen = ((f64, f64, f64, f64), bool);
+
+fn restore_failed() -> &'static Mutex<HashSet<String>> {
+    static FAILED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    FAILED.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn failure_key(display_id: &str, path: &str) -> String {
+    format!("{display_id}\u{0}{path}")
+}
+
+fn latch_failure(display_id: &str, path: &str) {
+    if let Ok(mut set) = restore_failed().lock() {
+        set.insert(failure_key(display_id, path));
+    }
+}
+
+fn clear_failure(display_id: &str, path: &str) {
+    if let Ok(mut set) = restore_failed().lock() {
+        set.remove(&failure_key(display_id, path));
+    }
+}
+
+fn is_latched_failure(display_id: &str, path: &str) -> bool {
+    restore_failed()
+        .lock()
+        .is_ok_and(|set| set.contains(&failure_key(display_id, path)))
+}
+
 /// 显示器热插拔 + 休眠唤醒 + 分辨率变化监视线程。
 pub fn spawn_monitor() {
     std::thread::spawn(|| {
-        let mut seen: HashMap<String, ((f64, f64, f64, f64), bool)> = HashMap::new();
+        let mut seen: HashMap<String, DisplaySeen> = HashMap::new();
+        let restoring: std::sync::Arc<Mutex<HashSet<String>>> =
+            std::sync::Arc::new(Mutex::new(HashSet::new()));
         loop {
             std::thread::sleep(Duration::from_secs(2));
-            let sessions = on_main(|_mtm| {
-                SESSIONS.with(|s| s.borrow().keys().cloned().collect::<Vec<String>>())
+            let active = on_main(|_mtm| {
+                let mut ids: Vec<String> = SESSIONS.with(|s| s.borrow().keys().cloned().collect());
+                for k in STAGED.with(|s| s.borrow().keys().cloned().collect::<Vec<_>>()) {
+                    if !ids.contains(&k) {
+                        ids.push(k);
+                    }
+                }
+                ids
             })
             .unwrap_or_default();
 
-            for id in &sessions {
+            for id in &active {
                 let Some(cgid) = displays::cg_id_for_stable(id) else {
-                    // 显示器拔出：销毁对应播放窗口
                     let did = id.clone();
-                    spawn_main(move |mtm| destroy_sessions_for(mtm, &did));
+                    let _ = on_main(move |mtm| destroy_sessions_for(mtm, &did));
                     let prev = states().lock().ok().and_then(|m| m.get(id).cloned());
                     publish(&state_of(
                         id,
@@ -538,12 +815,12 @@ pub fn spawn_monitor() {
                 };
                 let asleep = displays::is_asleep(cgid);
                 let bounds = displays::logical_bounds(cgid);
-                let changed = seen.get(id).is_some_and(|(b, _)| *b != bounds);
+                let prev = seen.get(id).copied();
+                let changed = prev.is_some_and(|(b, _)| b != bounds);
                 seen.insert(id.clone(), (bounds, asleep));
                 let did = id.clone();
                 if asleep {
-                    // 休眠前暂停播放器
-                    spawn_main(move |_mtm| {
+                    let _ = on_main(move |_mtm| {
                         SESSIONS.with(|s| {
                             if let Some(sess) = s.borrow_mut().get_mut(&did) {
                                 if !sess.user_paused {
@@ -554,15 +831,13 @@ pub fn spawn_monitor() {
                         });
                     });
                 } else {
-                    let resume = seen.get(id).is_some_and(|(_, a)| !*a) || changed;
+                    let resume = prev.is_some_and(|(_, a)| a) || changed;
                     if resume {
-                        // 唤醒/重连/分辨率变化：重新定位窗口并恢复播放
                         let did2 = id.clone();
-                        spawn_main(move |mtm| {
+                        let _ = on_main(move |mtm| {
                             SESSIONS.with(|s| {
                                 if let Some(sess) = s.borrow_mut().get_mut(&did2) {
-                                    if let Some(screen) =
-                                        desktop::screen_for_stable_id(mtm, &did2)
+                                    if let Some(screen) = desktop::screen_for_stable_id(mtm, &did2)
                                     {
                                         let frame = screen.frame();
                                         sess.window.setFrame_display(frame, true);
@@ -581,25 +856,43 @@ pub fn spawn_monitor() {
                 }
             }
 
-            // 重新连接的显示器：按持久化配置恢复动态壁纸
             let s = settings::get();
             for (id, a) in &s.assignments {
-                if a.kind == MediaKind::Video
-                    && !sessions.contains(id)
-                    && displays::cg_id_for_stable(id).is_some()
+                if a.kind != MediaKind::Video
+                    || active.contains(id)
+                    || display_inflight(id)
+                    || displays::cg_id_for_stable(id).is_none()
                 {
-                    let assignment = a.clone();
-                    let id = id.clone();
-                    std::thread::spawn(move || {
-                        if let Ok(state) = apply(assignment) {
-                            publish(&state);
-                        } else if let Ok(mut m) = states().lock() {
-                            if let Some(st) = m.get_mut(&id) {
-                                st.phase = Phase::Static;
-                            }
-                        }
-                    });
+                    continue;
                 }
+                if is_latched_failure(id, &a.path) {
+                    continue;
+                }
+                {
+                    let Ok(mut r) = restoring.lock() else {
+                        continue;
+                    };
+                    if !r.insert(id.clone()) {
+                        continue;
+                    }
+                }
+                let assignment = a.clone();
+                let id = id.clone();
+                let restoring = std::sync::Arc::clone(&restoring);
+                std::thread::spawn(move || {
+                    let shown = assignment.clone();
+                    let path = shown.path.clone();
+                    match apply(assignment) {
+                        Ok(state) => publish(&state),
+                        Err(e) => {
+                            latch_failure(&id, &path);
+                            publish(&state_of(&id, Phase::Static, Some(shown), Some(e)));
+                        }
+                    }
+                    if let Ok(mut r) = restoring.lock() {
+                        r.remove(&id);
+                    }
+                });
             }
         }
     });

@@ -8,7 +8,7 @@ import SvgIcon from "./SvgIcon.vue";
 const app = useApp();
 const fileInput = ref<HTMLInputElement | null>(null);
 
-const isTauri = "__TAURI_INTERNALS__" in window;
+const isNativeBridge = typeof window !== "undefined" && !!window.DotWallpaperNative;
 
 const displayLabel = computed(() => {
   const d = app.selectedDisplay.value;
@@ -36,7 +36,7 @@ const displayTitle = computed(() => {
 
 const displayCount = computed(() => app.displays.value.length);
 
-// 导入文件：优先取原生 File.path（Tauri/WKWebView 可用时），否则提示拖放
+// 浏览器开发模式没有绝对路径权限；原生 WKWebView 则使用 Swift 提供的文件选择器
 function onFileChange(e: Event) {
   const input = e.target as HTMLInputElement;
   const files = Array.from(input.files ?? []);
@@ -53,7 +53,7 @@ function onFileChange(e: Event) {
 }
 
 async function clickImport() {
-  if (!isTauri) {
+  if (!isNativeBridge) {
     fileInput.value?.click();
     return;
   }
@@ -69,7 +69,6 @@ async function clickImport() {
 <template>
   <header
     class="dw-toolbar flex h-12 shrink-0 items-center gap-2 px-3.5"
-    data-tauri-drag-region
   >
     <!-- 目录：名称占位，完整路径放 tooltip -->
     <div class="flex min-w-0 flex-1 items-center gap-2">

@@ -17,6 +17,7 @@ const props = defineProps<{
     | "image"
     | "film"
     | "check"
+    | "search"
     | "close";
   size?: number;
   /** 实心渲染（播放三角等） */
@@ -37,6 +38,7 @@ const PATHS: Record<string, string[]> = {
   image: ["M3 5h18v14H3Z", "M8.5 12a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3", "m5 18 5-5 3 3 3-3 3 3"],
   film: ["M3 5h18v14H3Z", "M8 5v14", "M16 5v14", "M3 12h18"],
   check: ["m5 13 4 4L19 7"],
+  search: ["M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14Z", "m16.5 16.5 4 4"],
   close: ["m6 6 12 12", "m18 6-12 12"],
 };
 

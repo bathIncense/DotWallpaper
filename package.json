@@ -2,16 +2,11 @@
   "name": "dot-wallpaper",
   "private": true,
   "version": "0.1.2",
-  "description": "DotWallpaper Tauri entry",
+  "description": "WallpaperEngine macOS 26+ native Xcode app",
   "scripts": {
-    "tauri": "tauri",
-    "dev": "tauri dev",
-    "build": "tauri build --target aarch64-apple-darwin --bundles app,dmg --config src-tauri/tauri.macos.conf.json",
-    "build:mac": "tauri build --target aarch64-apple-darwin --bundles app,dmg --config src-tauri/tauri.macos.conf.json",
-    "build:mac:app": "tauri build --target aarch64-apple-darwin --bundles app --config src-tauri/tauri.macos.conf.json",
+    "dev": "npm --prefix ui run dev",
+    "build:mac": "bash scripts/release_mac.sh",
+    "build:mac:app": "bash scripts/build_xcode_mac.sh",
     "release:mac": "bash scripts/release_mac.sh"
-  },
-  "devDependencies": {
-    "@tauri-apps/cli": "^2"
   }
 }

@@ -5,3 +5,13 @@ declare module "*.vue" {
   const component: DefineComponent<{}, {}, any>;
   export default component;
 }
+
+declare global {
+  interface Window {
+    DotWallpaperNative?: {
+      invoke(action: string, params?: Record<string, unknown>): void;
+    };
+  }
+}
+
+export {};

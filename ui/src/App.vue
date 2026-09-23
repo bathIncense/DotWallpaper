@@ -1,7 +1,6 @@
 <script setup lang="ts">
 // App - macOS 紧凑三段式布局：顶部工具栏 / 左侧媒体网格 / 右侧预览与控制
 import { onMounted, onUnmounted } from "vue";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useApp } from "./composables/useApp";
 import TopBar from "./components/TopBar.vue";
 import MediaGrid from "./components/MediaGrid.vue";
@@ -12,39 +11,18 @@ import SvgIcon from "./components/SvgIcon.vue";
 const app = useApp();
 
 // ---------- 拖放导入 ----------
-// 优先使用 Tauri 原生拖放事件（可获得真实本地路径），
-// 浏览器 / 开发环境下回退到 HTML5 drop。
-let unlistenDragDrop: (() => void) | null = null;
-
-onMounted(async () => {
+// 原生 Xcode/WKWebView 使用 HTML5 拖放；可取得路径时交给 Rust，
+// 浏览器环境则给出明确提示。
+onMounted(() => {
   void app.refreshAll();
-  try {
-    unlistenDragDrop = await getCurrentWebview().onDragDropEvent((event) => {
-      const payload = event.payload;
-      if (payload.type === "enter" || payload.type === "over") {
-        app.setDragging(true);
-      } else if (payload.type === "leave") {
-        app.setDragging(false);
-      } else if (payload.type === "drop") {
-        app.setDragging(false);
-        const paths = payload.paths ?? [];
-        if (paths.length) void app.importPaths(paths);
-      }
-    });
-  } catch {
-    // 非 Tauri 环境：使用 HTML5 drop（见 onHtmlDrop）
-  }
   window.addEventListener("keydown", onKeydown);
 });
 
 onUnmounted(() => {
-  unlistenDragDrop?.();
   window.removeEventListener("keydown", onKeydown);
 });
 
-// HTML5 回退：仅在没有 Tauri 拖放事件时生效
 function onHtmlDrop(e: DragEvent) {
-  if (unlistenDragDrop) return;
   const files = Array.from(e.dataTransfer?.files ?? []);
   const paths = files
     .map((f) => (f as File & { path?: string }).path || f.name)
@@ -55,7 +33,6 @@ function onHtmlDrop(e: DragEvent) {
 }
 
 function onHtmlDragOver(e: DragEvent) {
-  if (unlistenDragDrop) return;
   e.preventDefault();
   app.setDragging(true);
 }

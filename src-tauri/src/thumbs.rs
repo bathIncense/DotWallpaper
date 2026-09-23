@@ -1,6 +1,6 @@
 // 缩略图管线：使用 macOS ImageIO（见 cfmedia.rs），不引入 Rust 编解码库。
 // - 缓存目录：app_cache_dir/thumbnails
-// - 命名：原图绝对路径 FNV-1a 64 稳定哈希，跨进程可复用
+// - 命名：路径哈希 + 内容指纹（mtime/大小），源文件被替换后旧缓存自然失效
 // - 图片：CGImageSourceCreateThumbnailAtIndex -> JPEG q85
 // - 视频：主线程 AVAssetImageGenerator 抽取首帧海报（posters/），再 ImageIO 缩放
 // - 列表命令仅等待首屏窗口，其余后台渐进生成
@@ -9,7 +9,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use tauri::{Emitter, Manager};
 
 use crate::cfmedia;
 use crate::engine;
@@ -31,13 +30,50 @@ fn fnv1a64(s: &str) -> u64 {
     hash
 }
 
+/// 源文件内容指纹（mtime + 大小）。文件被替换后指纹改变，缓存名随之更换，
+/// 无需全量清库即可让缩略图/海报自动失效。取不到元数据时指纹为 0。
+fn content_stamp(src: &str) -> u64 {
+    let Ok(meta) = std::fs::metadata(src) else {
+        return 0;
+    };
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    fnv1a64(&format!("{mtime}:{}", meta.len()))
+}
+
+/// 同一源文件的全部缓存变体共有的文件名前缀（仅路径哈希）
+fn name_prefix(src: &str) -> String {
+    format!("{:016x}", fnv1a64(src))
+}
+
 pub fn hashed_file_name(src: &str, ext: &str) -> String {
-    format!("{:016x}.{}", fnv1a64(src), ext)
+    format!("{}-{:016x}.{ext}", name_prefix(src), content_stamp(src))
+}
+
+/// 删除某源文件在 dir 下的所有缓存变体（含内容变化后遗留的旧名字）
+fn remove_variants(dir: &Path, src: &str, ext: &str) {
+    if !dir.is_dir() {
+        return;
+    }
+    let (prefix, suffix) = (name_prefix(src), format!(".{ext}"));
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with(&prefix) && name.ends_with(&suffix) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 fn app_path(join: fn(PathBuf) -> PathBuf) -> Result<PathBuf, String> {
-    let app = runtime::app()?;
-    let dir = app.path().app_cache_dir().map_err(|e| e.to_string())?;
+    let dir = runtime::app_cache_dir()?;
     Ok(join(dir))
 }
 
@@ -54,12 +90,38 @@ fn cached_thumb(src: &str, cache: &Path) -> Option<String> {
     p.is_file().then(|| p.to_string_lossy().to_string())
 }
 
+const POSTER_SPACING: Duration = Duration::from_millis(120);
+
+fn poster_slot() -> &'static Mutex<Instant> {
+    static SLOT: OnceLock<Mutex<Instant>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(Instant::now()))
+}
+
+fn wait_poster_slot() {
+    loop {
+        let mut next = poster_slot().lock().expect("poster slot");
+        let now = Instant::now();
+        if now >= *next {
+            *next = now + POSTER_SPACING;
+            return;
+        }
+        let wait = *next - now;
+        drop(next);
+        std::thread::sleep(wait.min(Duration::from_millis(20)));
+    }
+}
+
 fn ensure_poster(src: &str) -> Option<String> {
     let poster = engine::poster_path(src);
     if poster.is_file() {
         return Some(poster.to_string_lossy().to_string());
     }
-    engine::generate_poster(src, &poster).ok()?;
+    wait_poster_slot();
+    let src = src.to_string();
+    let out = poster.clone();
+    runtime::on_main(move |_mtm| engine::generate_poster(&src, &out))
+        .ok()?
+        .ok()?;
     Some(poster.to_string_lossy().to_string())
 }
 
@@ -71,7 +133,6 @@ fn ensure_thumb(src: &str, kind: MediaKind, cache: &Path) -> Option<String> {
     let _ = std::fs::create_dir_all(cache);
     let source_image = match kind {
         MediaKind::Image => {
-            // 小图直接以原图作为缩略图，避免多余落盘
             if let Some((w, h)) = cfmedia::image_size(src) {
                 if w.max(h) <= THUMB_SIZE as usize {
                     return Some(src.to_string());
@@ -89,6 +150,16 @@ fn ensure_thumb(src: &str, kind: MediaKind, cache: &Path) -> Option<String> {
 fn inflight_set() -> &'static Mutex<HashSet<String>> {
     static INFLIGHT: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
     INFLIGHT.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// 缩略图就绪回调类型
+pub type ThumbCallback = extern "C" fn(*const std::ffi::c_char, *const std::ffi::c_char);
+
+static THUMB_CB: OnceLock<Mutex<Option<ThumbCallback>>> = OnceLock::new();
+
+pub fn set_thumb_callback(cb: ThumbCallback) {
+    let mut guard = THUMB_CB.get_or_init(|| Mutex::new(None)).lock().unwrap();
+    *guard = Some(cb);
 }
 
 /// 构建媒体列表条目：缓存命中即用，缺失项在预算内生成首屏，其余交后台线程。
@@ -141,20 +212,26 @@ pub fn make_entries(items: Vec<(String, MediaKind)>) -> Vec<MediaItem> {
                 let Some((src, kind)) = next else { break };
                 let thumb = ensure_thumb(&src, kind, &cache_t);
                 if let Some(t) = &thumb {
-                    if let Ok(app) = runtime::app() {
-                        let _ = app.emit(
-                            "thumbnail-ready",
-                            serde_json::json!({ "path": src, "thumb": t }),
-                        );
+                    if let Some(guard) = THUMB_CB.get() {
+                        if let Ok(cb_guard) = guard.lock() {
+                            if let Some(cb) = *cb_guard {
+                                let path_c =
+                                    std::ffi::CString::new(src.clone()).unwrap_or_default();
+                                let thumb_c = std::ffi::CString::new(t.clone()).unwrap_or_default();
+                                cb(path_c.as_ptr(), thumb_c.as_ptr());
+                            }
+                        }
                     }
                 }
                 results.lock().unwrap().insert(src.clone(), thumb);
                 inflight_set().lock().unwrap().remove(&src);
             });
         }
-        // 首屏预算等待
-        let prefetch: HashSet<String> =
-            batch.iter().take(PREFETCH_N).map(|(p, _)| p.clone()).collect();
+        let prefetch: HashSet<String> = batch
+            .iter()
+            .take(PREFETCH_N)
+            .map(|(p, _)| p.clone())
+            .collect();
         let deadline = Instant::now() + Duration::from_millis(PREFETCH_BUDGET_MS);
         loop {
             let done = {
@@ -183,6 +260,7 @@ pub fn make_entries(items: Vec<(String, MediaKind)>) -> Vec<MediaItem> {
                 .unwrap_or_default();
             MediaItem {
                 thumb: thumbs.get(&path).cloned().unwrap_or_default(),
+                mtime: mtime_of(&path),
                 path,
                 name,
                 kind,
@@ -191,16 +269,16 @@ pub fn make_entries(items: Vec<(String, MediaKind)>) -> Vec<MediaItem> {
         .collect()
 }
 
+/// 修改时间（Unix 秒）；读不到记 0，界面按时间排序时把 0 视为未知排末尾
+pub(crate) fn mtime_of(path: &str) -> i64 {
+    std::fs::metadata(path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs() as i64)
+}
+
 pub fn delete_thumb(src: &str, cache: &Path) {
-    if !cache.is_dir() {
-        return;
-    }
-    let p = cache.join(hashed_file_name(src, THUMB_EXT));
-    if p.is_file() {
-        let _ = std::fs::remove_file(p);
-    }
-    let poster = engine::poster_path(src);
-    if poster.is_file() {
-        let _ = std::fs::remove_file(poster);
-    }
+    remove_variants(cache, src, THUMB_EXT);
+    remove_variants(&poster_dir(), src, THUMB_EXT);
 }

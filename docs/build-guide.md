@@ -1,121 +1,136 @@
-# DotWallpaper macOS 构建指南
+# WallpaperEngine macOS 26+ 构建指南
+
+当前构建链是 **原生 Xcode + SwiftUI/WKWebView + Rust static library**，不再使用
+Tauri CLI 的 `.app` / `.dmg` 打包流程。目标平台为 **Apple Silicon arm64**，最低系统版本为
+**macOS 26.0**。
 
 ## 环境要求
 
-- macOS 12（Monterey）或更高版本
-- Apple Silicon Mac（M1/M2/M3/M4）
-- Xcode Command Line Tools（无需完整 Xcode）
-- Node.js 18+
-- Rust 稳定工具链
-
-## 安装步骤
-
-### 1. 安装 Xcode Command Line Tools
-
-```bash
-xcode-select --install
-```
-
-### 2. 安装 Rust
-
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
-
-添加 Apple Silicon 目标：
+- macOS 26 或更高版本
+- Xcode 27 或更高版本，并已选择完整 Xcode：
+  `sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer`
+- Node.js / npm
+- Rust stable，以及 `aarch64-apple-darwin` target：
 
 ```bash
 rustup target add aarch64-apple-darwin
 ```
 
-### 3. 安装 Node.js 依赖
+## 安装依赖
+
+在仓库根目录执行：
 
 ```bash
-# 前端依赖
-cd ui
-npm install
-
-# 根目录依赖（Tauri CLI）
-cd ..
-npm install
+npm install --prefix ui
 ```
 
-## 开发模式
+根目录的 `package.json` 只提供构建快捷命令；Xcode 构建阶段会调用
+`npm --prefix ui run build` 生成 Vue 前端。
+
+## 只构建并验证 `.app`
 
 ```bash
-npm run tauri dev
-```
-
-## 构建 macOS 应用
-
-```bash
-# 构建 .app 和 .dmg
-npm run build
-
-# 仅构建 .app
 npm run build:mac:app
 ```
 
-## 构建产物
+该命令执行：
 
-- `.app`：`src-tauri/target/aarch64-apple-darwin/release/bundle/macos/DotWallpaper.app`
-- `.dmg`：`src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/DotWallpaper_0.1.2_aarch64.dmg`
+1. `xcodebuild -project xcode/WallpaperEngine.xcodeproj -scheme WallpaperEngine`
+2. 构建 Vue `ui/dist`
+3. 用 Cargo 生成 `aarch64-apple-darwin` Rust static library
+4. 链接 Swift/AppKit/WKWebView 应用
+5. 校验产物确实是 `arm64`，且 `LSMinimumSystemVersion=26.0`
 
-## 项目结构
+产物：
 
-```
-DotWallpaper/
-├── ui/                              # 前端项目
-│   ├── src/
-│   │   ├── App.vue                  # 根组件
-│   │   ├── main.ts                  # 入口
-│   │   ├── styles/                  # 样式
-│   │   ├── lib/                     # 工具库
-│   │   ├── stores/                  # Pinia 状态
-│   │   └── components/              # 组件
-│   ├── index.html
-│   └── package.json
-├── src-tauri/                       # Rust 后端
-│   ├── src/
-│   │   ├── main.rs                  # Tauri 入口
-│   │   ├── wallpaper.rs             # 壁纸管理
-│   │   ├── thumbs.rs                # 缩略图管线
-│   │   └── platform/
-│   │       ├── mod.rs               # 平台 trait
-│   │       └── macos/
-│   │           ├── mod.rs           # macOS 入口
-│   │           ├── desktop.rs       # NSWorkspace + 播放
-│   │           ├── displays.rs      # CGDisplay
-│   │           ├── playback.rs      # AVFoundation
-│   │           └── heic.rs          # HEIC 检测
-│   ├── Cargo.toml
-│   ├── tauri.conf.json
-│   ├── tauri.macos.conf.json        # macOS 打包配置
-│   ├── capabilities/default.json
-│   └── icons/
-│       └── icon.icns                # macOS 图标
-├── docs/
-│   ├── build-guide.md               # 本文件
-│   └── p0-verification-checklist.md # P0 验证清单
-├── .github/workflows/workflow.yml   # CI 配置
-├── README.md
-└── package.json
+```text
+build/xcode-derived/Build/Products/Release/WallpaperEngine.app
 ```
 
-## 常见问题
-
-### 构建失败
+本地运行：
 
 ```bash
-# 清理并重新构建
-cargo clean
-cargo build --target aarch64-apple-darwin
+open build/xcode-derived/Build/Products/Release/WallpaperEngine.app
 ```
 
-### 签名与公证
+## 生成安装 DMG
 
-发布版本需要 Apple Developer 账号进行签名和公证。开发构建无需签名即可在本地运行。
+```bash
+npm run release:mac
+# 等价命令：npm run build:mac
+```
 
-### 动态壁纸
+发布脚本顺序固定为：
 
-视频/GIF 动态壁纸使用 AVFoundation 实现桌面播放层，需要 macOS 12+ 支持。
+1. Xcode Release 构建
+2. 对最终主二进制执行 `strip -x`
+3. ad-hoc 签名（默认，仅适合本机/内部测试）或 Developer ID 签名
+4. `codesign --verify --deep --strict` 校验
+5. 使用 macOS 26 标准 `diskutil image create from` 创建 UDZO DMG
+6. 如提供公证配置，提交公证并 staple
+
+产物：
+
+```text
+build/xcode-derived/Build/Products/Release/WallpaperEngine.app
+build/WallpaperEngine_0.1.2_arm64.dmg
+```
+
+`diskutil image create from` 是 macOS 26 的标准镜像创建命令；脚本不再调用已弃用的 `hdiutil create`。
+
+## Developer ID 签名与公证
+
+默认没有 Developer ID 时，脚本使用 ad-hoc 签名，适合本机验证，不代表可对外分发。
+正式发布前设置：
+
+```bash
+export DW_SIGN_IDENTITY="Developer ID Application: 你的证书名 (TEAMID)"
+export DW_NOTARY_PROFILE="已通过 xcrun notarytool store-credentials 保存的 profile"
+npm run release:mac
+```
+
+脚本会在找不到签名身份时直接失败，不会静默退回 ad-hoc。没有
+`DW_NOTARY_PROFILE` 时可以签名，但会明确提示尚未公证。
+
+验证签名：
+
+```bash
+codesign --verify --deep --strict --verbose=1 \
+  build/xcode-derived/Build/Products/Release/WallpaperEngine.app
+hdiutil verify build/WallpaperEngine_0.1.2_arm64.dmg
+```
+
+## 开发与检查
+
+Vue 前端开发服务器：
+
+```bash
+npm run dev
+```
+
+它只启动 Vite 开发服务器；原生 WKWebView 运行时仍应使用 Xcode 构建的 `.app`。
+
+离线检查：
+
+```bash
+npm run build --prefix ui
+cargo test --manifest-path src-tauri/Cargo.toml
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+```
+
+## 目录说明
+
+- `xcode/WallpaperEngine.xcodeproj`：主工程、SwiftUI/WKWebView 宿主
+- `xcode/WallpaperEngineApp/Sources/App/ContentView.swift`：WKWebView 与原生消息桥
+- `xcode/WallpaperEngineApp/Sources/Core/DotWallpaperCore.swift`：Rust FFI 调用层
+- `src-tauri/`：Rust 核心库，保留目录名以避免迁移已有代码
+- `src-tauri/dotwallpaper.h`：C ABI 头文件
+- `ui/`：Vue 前端；构建后资源会内联进 `ui/dist/index.html`，适配 `file://` WKWebView
+- `scripts/build_xcode_mac.sh`：仅构建 `.app`
+- `scripts/release_mac.sh`：构建、签名、校验、DMG 发布
+
+## 已知边界
+
+- 只生成 arm64，不生成 Intel 或 Universal 包。
+- ad-hoc 签名不等于 Developer ID + notarization；下载后可能被 Gatekeeper 拦截。
+- 多显示器热插拔、长时间播放、休眠唤醒等仍需在目标机器上做真实运行验收，不能仅用编译成功替代。

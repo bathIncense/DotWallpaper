@@ -6,11 +6,11 @@
   "description": "DotWallpaper 壁纸工具 - Vue 3 前端（独立工程）",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "typecheck": "vue-tsc --noEmit",
+    "build": "vue-tsc --noEmit && vite build && node scripts/inline-dist.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.0.0",
     "vue": "^3.4.0"
   },
   "devDependencies": {
@@ -18,6 +18,8 @@
     "@types/node": "^26.4.1",
     "@vitejs/plugin-vue": "^5.2.4",
     "tailwindcss": "^4.3.3",
-    "vite": "^5.4.21"
+    "typescript": "~5.9.0",
+    "vite": "^5.4.21",
+    "vue-tsc": "^3.3.11"
   }
 }

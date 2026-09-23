@@ -15,13 +15,13 @@ tests/**/coverage/
 
 # Editor directories and files
 .idea
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
 tsconfig.tsbuildinfo
 
 
 src-tauri/target
 src-tauri/gen
 .tauri
+
+# Native Xcode build output and generated Rust bridge header
+build/
+include/dotwallpaper.h
