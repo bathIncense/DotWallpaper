@@ -26,7 +26,7 @@
         F00000000000000000000001 /* App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WallpaperEngineApp/Sources/App/WallpaperEngineApp.swift"; sourceTree = "<group>"; };
         F00000000000000000000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WallpaperEngineApp/Sources/App/ContentView.swift"; sourceTree = "<group>"; };
         F00000000000000000000003 /* DotWallpaperCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WallpaperEngineApp/Sources/Core/DotWallpaperCore.swift"; sourceTree = "<group>"; };
-        F00000000000000000000006 /* libdotwallpaper.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libdotwallpaper.a; path = "../src-tauri/target/aarch64-apple-darwin/debug/libdotwallpaper.a"; sourceTree = "<group>"; };
+        F00000000000000000000006 /* libdotwallpaper.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libdotwallpaper.a; path = "../rust-core/target/aarch64-apple-darwin/debug/libdotwallpaper.a"; sourceTree = "<group>"; };
         F00000000000000000000007 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "WallpaperEngineApp/Resources/Assets.xcassets"; sourceTree = "<group>"; };
         F00000000000000000000008 /* dist */ = {isa = PBXFileReference; lastKnownFileType = folder; name = dist; path = "../ui/dist"; sourceTree = "<group>"; };
         F00000000000000000000010 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
@@ -180,7 +180,7 @@
             );
             runOnlyForDeploymentPostprocessing = 0;
             shellPath = /bin/bash;
-            shellScript = "set -e\nRUST_PROJECT_DIR=\"${SRCROOT}/../src-tauri\"\nINCLUDE_DIR=\"${SRCROOT}/../include\"\nmkdir -p \"$INCLUDE_DIR\"\ncd \"$RUST_PROJECT_DIR\"\nif [ \"$CONFIGURATION\" = \"Release\" ]; then\n    cargo build --lib --release --target aarch64-apple-darwin\nelse\n    cargo build --lib --target aarch64-apple-darwin\nfi\ncp dotwallpaper.h \"$INCLUDE_DIR/dotwallpaper.h\"\necho \"Rust build complete\"\n";
+            shellScript = "set -e\nRUST_PROJECT_DIR=\"${SRCROOT}/../rust-core\"\nINCLUDE_DIR=\"${SRCROOT}/../include\"\nmkdir -p \"$INCLUDE_DIR\"\ncd \"$RUST_PROJECT_DIR\"\nif [ \"$CONFIGURATION\" = \"Release\" ]; then\n    cargo build --lib --release --target aarch64-apple-darwin\nelse\n    cargo build --lib --target aarch64-apple-darwin\nfi\ncp dotwallpaper.h \"$INCLUDE_DIR/dotwallpaper.h\"\necho \"Rust build complete\"\n";
             showEnvVarsInLog = 0;
         };
 /* End PBXShellScriptBuildPhase section */
@@ -261,7 +261,7 @@
                 );
                 LIBRARY_SEARCH_PATHS = (
                     "$(inherited)",
-                    "$(PROJECT_DIR)/../src-tauri/target/aarch64-apple-darwin/debug",
+                    "$(PROJECT_DIR)/../rust-core/target/aarch64-apple-darwin/debug",
                 );
                 MARKETING_VERSION = 0.1.2;
                 PRODUCT_BUNDLE_IDENTIFIER = com.dot.wallpaper;
@@ -289,7 +289,7 @@
                 );
                 LIBRARY_SEARCH_PATHS = (
                     "$(inherited)",
-                    "$(PROJECT_DIR)/../src-tauri/target/aarch64-apple-darwin/release",
+                    "$(PROJECT_DIR)/../rust-core/target/aarch64-apple-darwin/release",
                 );
                 MARKETING_VERSION = 0.1.2;
                 PRODUCT_BUNDLE_IDENTIFIER = com.dot.wallpaper;

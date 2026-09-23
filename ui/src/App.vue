@@ -7,8 +7,12 @@ import MediaGrid from "./components/MediaGrid.vue";
 import PreviewPanel from "./components/PreviewPanel.vue";
 import Toaster from "./components/Toaster.vue";
 import SvgIcon from "./components/SvgIcon.vue";
+import SettingsPanel from "./components/SettingsPanel.vue";
+import Onboarding from "./components/Onboarding.vue";
+import { ref } from "vue";
 
 const app = useApp();
+const settingsOpen = ref(false);
 
 // ---------- 拖放导入 ----------
 // 原生 Xcode/WKWebView 使用 HTML5 拖放；可取得路径时交给 Rust，
@@ -58,7 +62,7 @@ function onKeydown(e: KeyboardEvent) {
     @dragleave.self="app.setDragging(false)"
     @drop.prevent="onHtmlDrop"
   >
-    <TopBar />
+    <TopBar @open-settings="settingsOpen = true" />
 
     <main class="dw-workspace flex min-h-0 flex-1">
       <MediaGrid />
@@ -80,6 +84,11 @@ function onKeydown(e: KeyboardEvent) {
       </Transition>
     </Teleport>
 
+    <SettingsPanel v-if="settingsOpen" @close="settingsOpen = false" />
+    <Onboarding
+      v-if="app.snapshotReady.value && !app.onboardingCompleted.value"
+      @done="app.completeOnboarding()"
+    />
     <Toaster />
   </div>
 </template>

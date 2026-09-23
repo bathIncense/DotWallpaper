@@ -6,6 +6,7 @@ import { api, errMessage } from "../lib/api";
 import SvgIcon from "./SvgIcon.vue";
 
 const app = useApp();
+const emit = defineEmits<{ "open-settings": [] }>();
 const fileInput = ref<HTMLInputElement | null>(null);
 
 const isNativeBridge = typeof window !== "undefined" && !!window.DotWallpaperNative;
@@ -103,6 +104,10 @@ async function clickImport() {
     </button>
 
     <span v-if="displayCount" class="dw-toolbar-divider mx-1 h-5 w-px shrink-0"></span>
+
+    <button class="mac-btn !px-1.5" title="设置" aria-label="设置" @click="emit('open-settings')">
+      <SvgIcon name="settings" :size="14" />
+    </button>
 
     <!-- 显示器选择 -->
     <label class="flex min-w-0 items-center gap-1.5">

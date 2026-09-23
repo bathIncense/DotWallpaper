@@ -1,7 +1,6 @@
 # WallpaperEngine macOS 26+ 构建指南
 
-当前构建链是 **原生 Xcode + SwiftUI/WKWebView + Rust static library**，不再使用
-Tauri CLI 的 `.app` / `.dmg` 打包流程。目标平台为 **Apple Silicon arm64**，最低系统版本为
+当前构建链统一为 **原生 Xcode + SwiftUI/WKWebView + Rust static library**，并由 macOS 原生工具完成 `.app` / `.dmg` 构建与签名。目标平台为 **Apple Silicon arm64**，最低系统版本为
 **macOS 26.0**。
 
 ## 环境要求
@@ -95,7 +94,7 @@ npm run release:mac
 验证签名：
 
 ```bash
-codesign --verify --deep --strict --verbose=1 \
+codesign --verify --strict --verbose=1 \
   build/xcode-derived/Build/Products/Release/WallpaperEngine.app
 hdiutil verify build/WallpaperEngine_0.1.2_arm64.dmg
 ```
@@ -114,8 +113,8 @@ npm run dev
 
 ```bash
 npm run build --prefix ui
-cargo test --manifest-path src-tauri/Cargo.toml
-cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path rust-core/Cargo.toml
+cargo clippy --manifest-path rust-core/Cargo.toml --all-targets -- -D warnings
 ```
 
 ## 目录说明
@@ -123,8 +122,8 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 - `xcode/WallpaperEngine.xcodeproj`：主工程、SwiftUI/WKWebView 宿主
 - `xcode/WallpaperEngineApp/Sources/App/ContentView.swift`：WKWebView 与原生消息桥
 - `xcode/WallpaperEngineApp/Sources/Core/DotWallpaperCore.swift`：Rust FFI 调用层
-- `src-tauri/`：Rust 核心库，保留目录名以避免迁移已有代码
-- `src-tauri/dotwallpaper.h`：C ABI 头文件
+- `rust-core/`：Rust 核心库（static library）
+- `rust-core/dotwallpaper.h`：C ABI 头文件
 - `ui/`：Vue 前端；构建后资源会内联进 `ui/dist/index.html`，适配 `file://` WKWebView
 - `scripts/build_xcode_mac.sh`：仅构建 `.app`
 - `scripts/release_mac.sh`：构建、签名、校验、DMG 发布

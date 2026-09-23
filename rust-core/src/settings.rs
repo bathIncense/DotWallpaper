@@ -21,6 +21,8 @@ pub struct AppSettings {
     pub default_fit_mode: FitMode,
     pub default_muted: bool,
     #[serde(default)]
+    pub onboarding_completed: bool,
+    #[serde(default)]
     pub assignments: HashMap<String, WallpaperAssignment>,
     /// 处于用户暂停状态的显示器 ID
     #[serde(default)]
@@ -34,6 +36,7 @@ impl Default for AppSettings {
             library_dir: String::new(),
             default_fit_mode: FitMode::Fill,
             default_muted: true,
+            onboarding_completed: false,
             assignments: HashMap::new(),
             paused_displays: Vec::new(),
         }

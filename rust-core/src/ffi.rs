@@ -92,6 +92,7 @@ pub extern "C" fn dw_get_app_snapshot() -> *mut std::ffi::c_char {
         "libraryDir": s.library_dir,
         "defaultFitMode": s.default_fit_mode,
         "defaultMuted": s.default_muted,
+        "onboardingCompleted": s.onboarding_completed,
         "displays": displays,
         "states": states,
     });
@@ -268,6 +269,7 @@ pub unsafe extern "C" fn dw_update_settings(settings_json: *const std::ffi::c_ch
         default_fit_mode: Option<FitMode>,
         #[serde(default)]
         default_muted: Option<bool>,
+        onboarding_completed: Option<bool>,
     }
 
     let req: UpdateReq = match serde_json::from_str(&json_str) {
@@ -284,6 +286,9 @@ pub unsafe extern "C" fn dw_update_settings(settings_json: *const std::ffi::c_ch
         }
         if let Some(muted) = req.default_muted {
             s.default_muted = muted;
+        }
+        if let Some(completed) = req.onboarding_completed {
+            s.onboarding_completed = completed;
         }
     });
 

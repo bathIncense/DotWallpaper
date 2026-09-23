@@ -198,15 +198,12 @@
 - [ ] 无需录屏权限
 - [ ] 无需完全磁盘访问权限（文件访问经系统对话框 / 库目录边界）
 - [ ] 不修改系统壁纸数据库之外的内容，不重启 Dock
-- [x] WebView 本地资源加载：Vite 使用相对 base，构建后 JS/CSS 内联进 `ui/dist/index.html`，发布运行不依赖 Tauri asset protocol。
+- [x] WebView 本地资源加载：Vite 使用相对 base，构建后 JS/CSS 内联进 `ui/dist/index.html`，发布运行由原生 WKWebView 加载内联资源。
       壁纸库目录改由运行时 `ensure_asset_scope`（启动 setup + 每次选目录）按当前配置逐目录授权。
       此前静态 scope 里还写着 `$HOME/Pictures/**`、`$PICTURE/**` 和两个系统桌面图片目录，等于让
       WebView 无条件可读整个 ~/Pictures，而库目录其实已经由运行时授权覆盖，故删除
 - [ ] 真机确认收窄后仍能出图：图片卡片缩略图、预览面板原图均正常加载，无 `convertFileSrc` 403/空白
-- [x] 构建配置单一来源：`src-tauri/tauri.macos.conf.json` 曾是 `tauri.conf.json` 的整份副本（仅
-      asset scope 不同），而 `build:mac*` 都带 `--config` 指向它——即基线里的 asset scope / 窗口配置
-      改动静默不生效。项目已 macOS-only，该覆盖文件已删除、脚本不再传 `--config`；
-      实测新包内 `strings` 已无 `Pictures/**`、`Desktop Pictures`，仅 `$RESOURCE/**` + `$APPCACHE/thumbnails/**`
+- [x] 构建配置统一由 Xcode 工程与构建脚本维护；迁移期间重复的旧桌面打包配置已清理。
 
 ## 9. 已知限制（按设计，不算缺陷）
 
@@ -229,7 +226,7 @@
 - [x] 签名自检已进流水线（每次 `release:mac` 都会跑）；顺带去掉了 `codesign --deep`——Apple 已弃用该选项，且本包只有一个主二进制、无嵌套代码，内→外分别签即可
 - [x] `codesign --verify --strict` 与 `hdiutil verify` 对最终代码产物再次通过
 - [x] `codesign --verify --strict` 通过、`hdiutil verify` 通过；`codesign -dvv` 为 `Signature=adhoc` / `TeamIdentifier=not set`
-- [x] 打包脚本已收敛（原「待定」已决定）：根构建已切换为原生 Xcode：`npm run build:mac:app` 生成 `WallpaperEngine.app`，`npm run release:mac` 通过 `diskutil image create from` 生成 DMG；不再调用 Tauri CLI 或 Tauri bundle。
+- [x] 打包脚本已收敛（原「待定」已决定）：根构建已切换为原生 Xcode：`npm run build:mac:app` 生成 `WallpaperEngine.app`，`npm run release:mac` 通过 `diskutil image create from` 生成 DMG；由 Xcode 原生构建与 macOS 磁盘映像工具完成。
 - [x] 签名命令与参数已验证可用（本机临时副本试签）：`--options runtime --timestamp` 生效，`codesign -dvvv` = `flags=0x10000(runtime)` + `Runtime Version=27.0.0` + 安全时间戳，`--verify --strict` 通过；`spctl` 仍 rejected 且 `origin=Apple Development`
 - [x] Developer ID + 公证路径已固化进脚本（`DW_SIGN_IDENTITY` / `DW_NOTARY_PROFILE`）：签 → 自检 → **再**出 DMG → 公证 DMG → staple DMG 与 .app → `spctl --assess`。顺序是关键——先出盘再签名的 DMG 等于没签。fail-closed 已负向实测：给一个不存在的身份，`codesign` 报 `no identity found`，脚本 exit 1 且不产出 DMG，不会静默退回 ad-hoc
 - [ ] Developer ID Application 签名（含 hardened runtime）——命令已在脚本里，本机 keychain 只有 `Apple Development` 一张证书，需先申请 Developer ID 证书后跑一次正向产物
@@ -244,9 +241,9 @@
 - [ ] Intel / Universal 决策明确（做或写清不支持）
 - [ ] 版本号、更新与升级策略确定
 
-## 接手须知（2026-09-22 本轮收尾）
+## 接手须知（2026-09-23）
 
-**当前产物状态**：`build/xcode-derived/Build/Products/Release/WallpaperEngine.app` 与 `build/WallpaperEngine_0.1.2_arm64.dmg` 已由 Xcode 27 / macOS 27 SDK 构建；产物为 arm64，最低系统版本 26.0，`codesign --verify --deep --strict` 与 DMG 校验通过；`cargo test` 16/16。工作区**未提交**（约 28 个改动文件 + 已暂存的 `D src-tauri/tauri.macos.conf.json`），是否提交由你定。
+**当前代码验证状态（2026-09-23）**：前端构建通过，Rust `cargo test` 16/16 通过，Xcode 27 构建 `.app` 成功（arm64，最低系统版本 26.0），`git diff --check` 通过。本轮未重新构建 DMG，也未进行 GUI/视频播放验收。
 
 **只有你能推进的三件事**
 

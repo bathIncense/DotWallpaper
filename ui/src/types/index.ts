@@ -59,6 +59,7 @@ export interface AppSnapshot {
   libraryDir: string;
   defaultFitMode: FitMode;
   defaultMuted: boolean;
+  onboardingCompleted: boolean;
   displays: DisplayInfo[];
   states: DisplayWallpaperState[];
 }
@@ -69,6 +70,7 @@ export interface AppSnapshot {
 export interface Settings {
   defaultFitMode: FitMode;
   defaultMuted: boolean;
+  onboardingCompleted: boolean;
 }
 
 /// 导入结果

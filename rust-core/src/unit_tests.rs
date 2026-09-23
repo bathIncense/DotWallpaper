@@ -183,11 +183,11 @@ mod tests {
     fn image_size_reads_properties_and_thumbnail_round_trip() {
         // 尺寸现在是查属性字典的 "PixelWidth"/"PixelHeight"（换取不再整幅解码），键名或
         // CFNumber 类型判断写错都会**静默**返回 None，小图判断随之失真——用仓库自带的
-        // 1024×1024 图标做正反向断言。
-        let png = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("icons/icon.png");
+        // 512×512 图标做正反向断言。
+        let png = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../xcode/WallpaperEngineApp/Resources/Assets.xcassets/AppIcon.appiconset/icon_512x512.png");
         assert_eq!(
             crate::cfmedia::image_size(&png.to_string_lossy()),
-            Some((1024, 1024)),
+            Some((512, 512)),
             "读到的应是真实像素尺寸"
         );
         let dir = scratch_dir("cfmedia");
@@ -418,6 +418,7 @@ mod tests {
             library_dir: "/lib".into(),
             default_fit_mode: FitMode::Fill,
             default_muted: true,
+            onboarding_completed: false,
             displays: vec![],
             states: vec![],
         };
@@ -427,6 +428,7 @@ mod tests {
                 "libraryDir": "/lib",
                 "defaultFitMode": "fill",
                 "defaultMuted": true,
+                "onboardingCompleted": false,
                 "displays": [],
                 "states": [],
             })
@@ -510,7 +512,7 @@ mod tests {
         }
     }
 
-    /// 路径一律由调用方传入或向 Tauri 解析器要，后端源码里不许出现手写的家目录/系统目录。
+    /// 路径一律由调用方传入或由原生宿主提供，后端源码里不许出现手写的家目录/系统目录。
     /// 这类字面量抄错不会编译失败，只会在另一台机器上静默写错位置（曾把 settings.json
     /// 落进壁纸库、也曾经把 identifier 手抄一遍，需要另一条测试来交叉校验）。
     /// 现在改成扫描源码本身：新增写死路径 = 测试红，而不是等下一次换机器才发现。

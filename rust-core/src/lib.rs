@@ -1,5 +1,5 @@
 // DotWallpaper 壁纸工具 - 核心库入口（macOS）
-// 不再依赖 Tauri，通过 C FFI 对外暴露功能。
+// 通过 C FFI 对外暴露功能。
 
 pub mod cfmedia;
 pub mod desktop;

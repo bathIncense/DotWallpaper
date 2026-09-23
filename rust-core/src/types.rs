@@ -91,6 +91,8 @@ pub struct MediaItem {
 pub struct FrontendSettings {
     pub default_fit_mode: FitMode,
     pub default_muted: bool,
+    #[serde(default)]
+    pub onboarding_completed: bool,
 }
 
 /// 前端启动时使用的完整应用快照。
@@ -100,6 +102,7 @@ pub struct AppSnapshot {
     pub library_dir: String,
     pub default_fit_mode: FitMode,
     pub default_muted: bool,
+    pub onboarding_completed: bool,
     pub displays: Vec<DisplayInfo>,
     pub states: Vec<DisplayWallpaperState>,
 }

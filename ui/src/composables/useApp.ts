@@ -28,6 +28,8 @@ const selectedPath = ref("");
 const selectedDisplayId = ref("");
 const fitMode = ref<FitMode>("fill");
 const muted = ref(true);
+const onboardingCompleted = ref(false);
+const snapshotReady = ref(false);
 const loadingMedia = ref(false);
 const mediaError = ref("");
 const applying = ref(false);
@@ -67,8 +69,10 @@ async function loadSnapshot() {
     libraryDir.value = snap.libraryDir ?? "";
     fitMode.value = snap.defaultFitMode ?? "fill";
     muted.value = snap.defaultMuted ?? true;
+    onboardingCompleted.value = snap.onboardingCompleted ?? false;
     displays.value = snap.displays ?? [];
     states.value = snap.states ?? [];
+    snapshotReady.value = true;
     if (!selectedDisplayId.value) {
       const primary = displays.value.find((d) => d.primary);
       selectedDisplayId.value = (primary ?? displays.value[0])?.id ?? "";
@@ -207,22 +211,25 @@ export function useApp() {
       await api.updateSettings({
         defaultFitMode: fitMode.value,
         defaultMuted: muted.value,
+        onboardingCompleted: onboardingCompleted.value,
       });
     } catch (err) {
       errToast("保存设置失败", err);
     }
   }
 
-  async function pickFolder() {
+  async function pickFolder(): Promise<boolean> {
     try {
       // 目录由 pick_library_directory 自己落盘并授权 asset scope，这里只更新界面
       const dir = await api.pickLibraryDirectory();
-      if (!dir) return;
+      if (!dir) return false;
       libraryDir.value = dir;
       await loadMedia(false);
       toast(`已切换到 ${dir}`, "success");
+      return true;
     } catch (err) {
       errToast("选择文件夹失败", err);
+      return false;
     }
   }
 
@@ -329,6 +336,11 @@ export function useApp() {
     void saveSettings();
   }
 
+  async function completeOnboarding() {
+    onboardingCompleted.value = true;
+    await saveSettings();
+  }
+
   function setDragging(v: boolean) {
     dragging.value = v;
   }
@@ -343,6 +355,8 @@ export function useApp() {
     selectedDisplayId,
     fitMode,
     muted,
+    onboardingCompleted,
+    snapshotReady,
     loadingMedia,
     mediaError,
     applying,
@@ -374,6 +388,7 @@ export function useApp() {
     selectDisplay,
     setFitMode,
     toggleMuted,
+    completeOnboarding,
     setDragging,
     toast,
     dismiss,

@@ -18,9 +18,8 @@ tests/**/coverage/
 tsconfig.tsbuildinfo
 
 
-src-tauri/target
-src-tauri/gen
-.tauri
+rust-core/target
+rust-core/gen
 
 # Native Xcode build output and generated Rust bridge header
 build/

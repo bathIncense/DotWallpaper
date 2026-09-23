@@ -1,0 +1,52 @@
+
+/* 首次启动与偏好设置：轻量原生面板 */
+.dw-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(8 12 20 / 48%);
+  backdrop-filter: blur(14px) saturate(1.2);
+}
+.dw-onboarding-backdrop { z-index: 90; }
+.dw-onboarding, .dw-settings {
+  width: min(100%, 560px);
+  max-height: min(760px, calc(100vh - 48px));
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 22px;
+  box-shadow: 0 28px 90px rgb(0 0 0 / 34%);
+}
+.dw-onboarding { padding: 28px; text-align: center; }
+.dw-onboarding-art {
+  position: relative;
+  display: grid;
+  width: 92px;
+  height: 92px;
+  margin: 0 auto;
+  place-items: center;
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 28px;
+  background: linear-gradient(145deg, rgb(127 169 255 / 20%), rgb(255 255 255 / 3%));
+}
+.dw-onboarding-orbit { position: absolute; inset: 10px; border: 1px solid rgb(255 255 255 / 14%); border-radius: 50%; }
+.orbit-two { inset: 19px; }
+.dw-step-dot {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  place-items: center;
+  border-radius: 50%;
+  background: rgb(127 169 255 / 17%);
+  color: var(--color-accent);
+  font-size: 10px;
+  font-weight: 700;
+}
+.dw-settings { display: flex; flex-direction: column; }
+@media (max-width: 600px) {
+  .dw-modal-backdrop { padding: 12px; }
+  .dw-onboarding { padding: 22px; }
+}
