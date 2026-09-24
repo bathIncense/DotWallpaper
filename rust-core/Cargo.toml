@@ -35,7 +35,7 @@ objc2-core-graphics = { version = "0.3", features = ["CGDirectDisplay", "CGWindo
 objc2-core-media = "0.3"
 
 [profile.release]
-panic = "abort"
+panic = "unwind"
 codegen-units = 1
 lto = true
 opt-level = "s"

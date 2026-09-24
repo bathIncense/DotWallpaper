@@ -30,6 +30,19 @@ use crate::desktop;
 use crate::displays;
 use crate::media;
 use crate::runtime::on_main;
+
+/// 在 monitor 等后台路径上隔离主线程回调中的 Rust panic。
+/// AppKit/objc2 的边界一旦遇到无效的显示器状态，不能让 panic 穿过
+/// CFRunLoop block 直接终止整个原生宿主；本轮操作失败即可，下一轮继续重试。
+fn on_main_safe<T: Send + 'static>(
+    label: &'static str,
+    f: impl FnOnce(&MainThreadMarker) -> T + Send + 'static,
+) -> Result<T, String> {
+    on_main(move |mtm| {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(mtm)))
+            .map_err(|_| format!("{label} 主线程回调异常"))
+    })?
+}
 use crate::settings;
 use crate::types::{
     ControlAction, DisplayWallpaperState, FitMode, MediaKind, Phase, WallpaperAssignment,
@@ -788,7 +801,7 @@ fn wait_then_pause(display_id: &str) {
 
 fn display_inflight(display_id: &str) -> bool {
     let id = display_id.to_string();
-    on_main(move |_mtm| {
+    on_main_safe("检查显示器播放会话", move |_mtm| {
         SESSIONS.with(|s| s.borrow().contains_key(&id))
             || STAGED.with(|s| s.borrow().contains_key(&id))
     })
@@ -827,12 +840,13 @@ fn is_latched_failure(display_id: &str, path: &str) -> bool {
 /// 显示器热插拔 + 休眠唤醒 + 分辨率变化监视线程。
 pub fn spawn_monitor() {
     std::thread::spawn(|| {
+        eprintln!("[wallpaper] monitor thread started");
         let mut seen: HashMap<String, DisplaySeen> = HashMap::new();
         let restoring: std::sync::Arc<Mutex<HashSet<String>>> =
             std::sync::Arc::new(Mutex::new(HashSet::new()));
         loop {
             std::thread::sleep(Duration::from_secs(2));
-            let active = on_main(|_mtm| {
+            let active = on_main_safe("读取活动显示器", |_mtm| {
                 let mut ids: Vec<String> = SESSIONS.with(|s| s.borrow().keys().cloned().collect());
                 for k in STAGED.with(|s| s.borrow().keys().cloned().collect::<Vec<_>>()) {
                     if !ids.contains(&k) {
@@ -846,7 +860,7 @@ pub fn spawn_monitor() {
             for id in &active {
                 let Some(cgid) = displays::cg_id_for_stable(id) else {
                     let did = id.clone();
-                    let _ = on_main(move |mtm| destroy_sessions_for(mtm, &did));
+                    let _ = on_main_safe("销毁断开显示器会话", move |mtm| destroy_sessions_for(mtm, &did));
                     let prev = states().lock().ok().and_then(|m| m.get(id).cloned());
                     publish(&state_of(
                         id,
@@ -863,7 +877,7 @@ pub fn spawn_monitor() {
                 seen.insert(id.clone(), (bounds, asleep));
                 let did = id.clone();
                 if asleep {
-                    let _ = on_main(move |_mtm| {
+                    let _ = on_main_safe("处理休眠显示器", move |_mtm| {
                         SESSIONS.with(|s| {
                             if let Some(sess) = s.borrow_mut().get_mut(&did) {
                                 if !sess.user_paused {
@@ -877,7 +891,7 @@ pub fn spawn_monitor() {
                     let resume = prev.is_some_and(|(_, a)| a) || changed;
                     if resume {
                         let did2 = id.clone();
-                        let _ = on_main(move |mtm| {
+                        let _ = on_main_safe("恢复显示器会话", move |mtm| {
                             SESSIONS.with(|s| {
                                 if let Some(sess) = s.borrow_mut().get_mut(&did2) {
                                     if let Some(screen) = desktop::screen_for_stable_id(mtm, &did2)
