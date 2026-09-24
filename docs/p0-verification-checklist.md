@@ -297,7 +297,7 @@
 
 复核命令：`npm --prefix ui run build`（含 2 项内联回归测试）、`cargo test --manifest-path rust-core/Cargo.toml`（16/16）、`cargo clippy --manifest-path rust-core/Cargo.toml --all-targets -- -D warnings`、`npm run build:mac:app` 均通过。DMG 在本轮没有重新制作，不应当作当前版本。
 
-## 2026-09-24 打开失败恢复及实际验证（本次最新状态）
+## 2026-09-24 打开失败恢复及实际验证（上一轮状态）
 
 - [x] 退出测试进程后，从备份恢复 `settings.json`；重启后首次引导仍已完成，原媒体库和三项显示器分配语义不变（仅 JSON 键顺序变化），未清除用户数据。
 - [x] `build:mac:app` 原先只让 Xcode 生成 linker-signed 可执行文件，bundle 的 `codesign --verify --deep --strict` 失败；构建脚本现在为整个 bundle 做 ad-hoc 签名及严格校验。
@@ -308,3 +308,15 @@
 - [ ] Gatekeeper 开启状态下用 Developer ID + 公证版本完成外部分发验收：当前 `spctl --assess` 仅显示 `accepted / override=security disabled`，不能视为发布通过。
 
 注意：上方 2026-09-23 与 2026-09-24 早期条目保留历史测试范围；“未重新制作 DMG/未应用视频”的说明不适用于本节之后的新产物。
+
+## 2026-09-24 再次打开失败：主线程崩溃修复与引导门控
+
+- [x] 检查 10:31–10:46 的四份系统 `.ips`：均为 `SIGABRT`，崩溃栈落在 `engine::spawn_monitor → runtime::on_main → MainThreadMarker::new().expect`。即使 GCD 主队列执行回调，也没有保证此处被识别为真实主线程；不能把先前「主队列」修复算作此问题已关闭。
+- [x] 主线程任务改投递到 CoreFoundation 的 **主线程 RunLoop**，同步路径返回显式错误，异步路径记录异常，不再让 `expect` 从 Rust FFI 边界中止整个应用。首次引导未完成时，启动恢复与监视恢复不读取旧媒体；引导完成后仅排队一次恢复，避免 300ms 启动窗口的双重恢复。
+- [x] 低高度引导弹层的内容可滚动、底部操作按钮保持可见；阻止重复点击；设置保存失败时不关闭引导。生产前端资源配模拟 bridge 的 Chrome 800×480 截图仅验证网页布局，**不等于原生窗口可见性**。
+- [x] Rust 16 项单测、Clippy `-D warnings`、发布 profile Rust 编译通过；当前用户 `settings.json` 与测试前备份 SHA-256 相同，未把 `onboardingCompleted` 留在 false。
+- [ ] 当前 Mac 锁定且「访问文稿」弹窗尚未由用户处理；新包仍需在解锁后实际启动、观察 3 秒以上确认监视线程不再崩溃，并走完目录选择、视频桌面画面、循环与菜单栏操作。**构建/签名通过不能替代此项**。
+- [x] 新 `.app` 与 DMG 已用 11:42 的前端资源（前端源码时间戳均早于资源）重建；Xcode 27 构建、ad-hoc 严格签名、arm64/最低 macOS 26.0、`hdiutil verify` 通过，**但这不是解锁后的打开验收**。
+- [ ] 当前锁定状态下 Vite/esbuild 两次卡在系统 `__open`，本次原生构建仅临时复用了既有 `ui/dist`；解锁后仍需正常执行完整 `npm --prefix ui run build` 与 `npm run release:mac` 再验。
+
+保留旧的历史验收条目用于追溯，以本节的未完成项为当前判断依据。公开分发仍需 Developer ID 签名、公证及 Gatekeeper 开启状态验证。
