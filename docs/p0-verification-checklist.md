@@ -296,3 +296,15 @@
 - [ ] 在首次启动的独立用户配置中，实测窄窗口及低窗口高度下引导选择/跳过，并确认保存设置。
 
 复核命令：`npm --prefix ui run build`（含 2 项内联回归测试）、`cargo test --manifest-path rust-core/Cargo.toml`（16/16）、`cargo clippy --manifest-path rust-core/Cargo.toml --all-targets -- -D warnings`、`npm run build:mac:app` 均通过。DMG 在本轮没有重新制作，不应当作当前版本。
+
+## 2026-09-24 打开失败恢复及实际验证（本次最新状态）
+
+- [x] 退出测试进程后，从备份恢复 `settings.json`；重启后首次引导仍已完成，原媒体库和三项显示器分配语义不变（仅 JSON 键顺序变化），未清除用户数据。
+- [x] `build:mac:app` 原先只让 Xcode 生成 linker-signed 可执行文件，bundle 的 `codesign --verify --deep --strict` 失败；构建脚本现在为整个 bundle 做 ad-hoc 签名及严格校验。
+- [x] 重新运行 `npm run release:mac`；新 DMG 通过 `hdiutil verify`，挂载后 `.app` 通过严格签名验证；从挂载 DMG 启动成功，管理窗口显示原媒体库 90 项，且没有新增 `.ips`。退出 DMG 实例后重开当前构建目录的 `.app` 成功。
+- [x] 上轮交互实测 `2k_pro_60059.mp4` 应用后状态为「播放中」，暂停为「已暂停」，恢复为「播放中」；随后已恢复原静态壁纸。此处仅确认界面状态与命令行为，不算桌面视频画面、无缝循环与关窗菜单栏控制验收。
+- [x] 上轮临时启动首次引导时，约 900×512 窗口中的标题、步骤与按钮可见。
+- [ ] 真正缩至 800×480 验证滚动与按钮可达；视频桌面画面/循环、长时间播放和关窗后菜单栏控制仍待验。
+- [ ] Gatekeeper 开启状态下用 Developer ID + 公证版本完成外部分发验收：当前 `spctl --assess` 仅显示 `accepted / override=security disabled`，不能视为发布通过。
+
+注意：上方 2026-09-23 与 2026-09-24 早期条目保留历史测试范围；“未重新制作 DMG/未应用视频”的说明不适用于本节之后的新产物。

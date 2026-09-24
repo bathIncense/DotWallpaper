@@ -61,7 +61,7 @@ npm install --prefix ui
 npm run dev
 ```
 
-构建并运行原生应用时，WKWebView 使用打包后的前端资源：
+构建并运行原生应用时，WKWebView 使用打包后的前端资源；单独构建的 `.app` 会自动进行本机 ad-hoc 签名并执行完整性校验：
 
 ```bash
 npm run build:mac:app
@@ -109,7 +109,7 @@ npm run release:mac
 
 本机已修复管理窗口空白、后台线程调用 AppKit 导致的崩溃，并将媒体扫描移出 WebKit 主线程。请从仓库根目录执行上面的完整路径 `open` 命令；**不要打开旧的 `build/WallpaperEngine.app`**（旧生成物已移到 `build/legacy-artifacts/`，不参与构建）。首次打开时，引导应先出现；请用系统目录选择器重新选择媒体库，让 macOS 授予当前原生应用该目录的访问权限。若目录读取超过 15 秒，会显示错误而不是永久转圈，可重新选目录或稍后重试。
 
-已实际看到修复后的管理窗口和首次引导；尚未实际完成目录授权、菜单栏控制和视频壁纸播放验收。默认 ad-hoc 签名 DMG 仅供本机/内部验证。
+历史故障记录：首次引导及管理窗口曾有崩溃与空白问题；当时的 DMG 不是后来修复的版本。最新验证见下方。默认 ad-hoc 签名 DMG 仅供本机/内部验证。
 
 ## 2026-09-24 视频与设置修复复核
 
@@ -117,3 +117,11 @@ npm run release:mac
 - 首次引导与设置的样式现已进入 WKWebView 发布 CSS；弹层限制窗口高度，内容可滚动。媒体目录的更改/重新选择集中在设置中，顶栏目录名会打开设置。
 - 如果刚改完代码却仍看到旧行为：先退出正在运行的旧进程，再执行 `npm run build:mac:app`，从 `build/xcode-derived/Build/Products/Release/WallpaperEngine.app` 打开。不要从旧 DMG 启动。**构建 .app 不会更新已有 DMG**；分发测试需重新运行 `npm run release:mac`。
 - 若媒体库提示「读取壁纸目录超时」，在设置中重新选择原文件夹。本机 2026-09-24 曾采样到工作线程阻塞在系统 `opendir`；通过原生选择器重新选择**同一目录**后，媒体库实际加载出 90 项。视频预览可解码和媒体库扫描成功仍不能替代桌面播放验收。
+
+## 2026-09-24 无法打开的修复与本机复测
+
+- 此前 `npm run build:mac:app` 设置 `CODE_SIGNING_ALLOWED=NO`，产出的 `.app` 虽能在当前机器上通过 `open` 启动，但 `codesign --verify --deep --strict` 报资源封装无效。现在构建脚本在生成 bundle 后进行 ad-hoc 签名和严格验证；`npm run release:mac` 仍会对最终 strip 后的 bundle 重新签名。
+- 旧 DMG 早于视频准备修复；本轮重新运行 `npm run release:mac`，生成 `build/WallpaperEngine_0.1.2_arm64.dmg`。`hdiutil verify`、挂载后 `.app` 的严格签名校验、从挂载 DMG 打开管理窗口和读取原媒体库 90 项均通过。早上的四份旧 `.ips` 对应此前 main-thread 崩溃，复测没有新增报告。
+- 备份并恢复了测试期间被临时修改的首次引导设置；当前 `onboardingCompleted=true`，媒体库目录和三台显示器分配与原备份语义一致。
+- 若仍无法打开，请确认打开的是上述新产物，退出旧进程后再试。ad-hoc 签名**不等于** Developer ID + 公证：本机 Gatekeeper 目前关闭，因此此测试不代表在默认安全策略的其他 Mac 上能直接双击打开；对外分发仍需 Developer ID 签名与公证。
+- 上轮界面操作曾对 `2k_pro_60059.mp4` 验证「播放中 → 暂停 → 恢复播放中」，随后恢复原静态图片；这是状态/控制验证，**没有**目视确认桌面视频画面和无缝循环。首次引导在约 900×512 窗口完整可见，800×480 的最小窗口尚未实测。
