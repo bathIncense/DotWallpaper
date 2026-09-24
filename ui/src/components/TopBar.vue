@@ -71,8 +71,8 @@ async function clickImport() {
   <header
     class="dw-toolbar flex h-12 shrink-0 items-center gap-2 px-3.5"
   >
-    <!-- 目录：名称占位，完整路径放 tooltip -->
-    <div class="flex min-w-0 flex-1 items-center gap-2">
+    <!-- 目录入口：权限和路径操作统一放在设置中 -->
+    <button class="flex min-w-0 flex-1 items-center gap-2 text-left" title="在设置中查看或更改壁纸目录" @click="emit('open-settings')">
       <span class="dw-toolbar-mark" aria-hidden="true">
         <SvgIcon name="folder" :size="14" class="text-accent" />
       </span>
@@ -81,12 +81,9 @@ async function clickImport() {
         :title="app.libraryDir.value || '未选择壁纸目录'"
         >{{ app.dirName.value }}</span
       >
-    </div>
+    </button>
 
     <!-- 操作：窄窗口下收敛为图标按钮，靠 tooltip 说明 -->
-    <button class="mac-btn !px-1.5" title="选择壁纸存放文件夹" @click="app.pickFolder()">
-      <SvgIcon name="folder" :size="14" />
-    </button>
     <button class="mac-btn !px-1.5" title="导入图片或视频" @click="clickImport">
       <SvgIcon name="import" :size="14" />
     </button>

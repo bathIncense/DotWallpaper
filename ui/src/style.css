@@ -14,12 +14,13 @@
 .dw-onboarding, .dw-settings {
   width: min(100%, 560px);
   max-height: min(760px, calc(100vh - 48px));
+  min-height: 0;
   overflow: hidden;
   border: 1px solid rgb(255 255 255 / 14%);
   border-radius: 22px;
   box-shadow: 0 28px 90px rgb(0 0 0 / 34%);
 }
-.dw-onboarding { padding: 28px; text-align: center; }
+.dw-onboarding { padding: 28px; overflow-y: auto; text-align: center; }
 .dw-onboarding-art {
   position: relative;
   display: grid;
@@ -46,7 +47,22 @@
   font-weight: 700;
 }
 .dw-settings { display: flex; flex-direction: column; }
+.dw-settings > header, .dw-settings > footer { flex: none; }
+.dw-settings > div { min-height: 0; }
 @media (max-width: 600px) {
   .dw-modal-backdrop { padding: 12px; }
   .dw-onboarding { padding: 22px; }
+}
+
+@media (max-height: 640px) {
+  .dw-modal-backdrop { padding: 12px; }
+  .dw-onboarding, .dw-settings { max-height: calc(100vh - 24px); }
+  .dw-onboarding { padding: 18px; }
+  .dw-onboarding-art { width: 52px; height: 52px; border-radius: 18px; }
+  .dw-onboarding-art svg { width: 24px; height: 24px; }
+}
+@media (max-width: 420px) {
+  .dw-onboarding { padding: 18px; }
+  .dw-onboarding h1 { font-size: 1.15rem; }
+  .dw-onboarding button { white-space: normal; }
 }

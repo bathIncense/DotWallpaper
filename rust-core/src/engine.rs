@@ -21,7 +21,7 @@ use objc2_app_kit::{
 };
 use objc2_av_foundation::{
     AVAsset, AVAssetImageGenerator, AVPlayerItem, AVPlayerItemStatus, AVPlayerLayer,
-    AVPlayerLooper, AVPlayerStatus, AVQueuePlayer,
+    AVPlayerLooper, AVPlayerLooperStatus, AVPlayerStatus, AVQueuePlayer,
 };
 use objc2_core_media::CMTime;
 use objc2_foundation::MainThreadMarker;
@@ -51,8 +51,7 @@ pub fn set_state_callback(cb: StateCallback) {
 struct Session {
     window: Retained<NSWindow>,
     player: Retained<AVQueuePlayer>,
-    item: Retained<AVPlayerItem>,
-    _looper: Retained<AVPlayerLooper>,
+    looper: Retained<AVPlayerLooper>,
     layer: Retained<AVPlayerLayer>,
     assignment: WallpaperAssignment,
     phase: Phase,
@@ -317,7 +316,8 @@ fn build_session(
     let asset = unsafe { AVAsset::assetWithURL(&url) };
     let item: Retained<AVPlayerItem> =
         unsafe { objc2::msg_send![objc2::class!(AVPlayerItem), playerItemWithAsset: &*asset] };
-    let items = objc2_foundation::NSArray::from_slice(std::slice::from_ref(&&*item));
+    // The template is not a playback item. Let AVPlayerLooper own the queue of replicas.
+    let items = objc2_foundation::NSArray::<AVPlayerItem>::new();
     let player: Retained<AVQueuePlayer> =
         unsafe { objc2::msg_send![objc2::class!(AVQueuePlayer), queuePlayerWithItems: &*items] };
     let looper = unsafe { AVPlayerLooper::playerLooperWithPlayer_templateItem(&player, &item) };
@@ -342,8 +342,7 @@ fn build_session(
     Ok(Session {
         window,
         player,
-        item,
-        _looper: looper,
+        looper,
         layer,
         assignment: a.clone(),
         phase: Phase::Preparing,
@@ -473,16 +472,37 @@ fn watch_step(mtm: &MainThreadMarker, display_id: &str, generation: u64) -> Watc
     let Some(st) = staged else {
         return WatchOutcome::Gone;
     };
-    let istatus = unsafe { st.session.item.status() };
-    if istatus == AVPlayerItemStatus::Failed {
-        let msg = unsafe { st.session.item.error() }
+    let lstatus = unsafe { st.session.looper.status() };
+    if lstatus == AVPlayerLooperStatus::Failed || lstatus == AVPlayerLooperStatus::Cancelled {
+        let msg = unsafe { st.session.looper.error() }
+            .map(|e| format!("视频循环准备失败: {}", e.localizedDescription()))
+            .unwrap_or_else(|| "视频循环器不可用".to_string());
+        close_session(&st.session);
+        return WatchOutcome::Failed(msg);
+    }
+    let pstatus = unsafe { st.session.player.status() };
+    if pstatus == AVPlayerStatus::Failed {
+        let msg = unsafe { st.session.player.error() }
+            .map(|e| format!("播放器准备失败: {}", e.localizedDescription()))
+            .unwrap_or_else(|| "播放器准备失败".to_string());
+        close_session(&st.session);
+        return WatchOutcome::Failed(msg);
+    }
+    // AVPlayerLooper clones the template; only the queue's current item is decoded.
+    let current = unsafe { st.session.player.currentItem() };
+    let istatus = current.as_ref().map(|item| unsafe { item.status() });
+    if istatus == Some(AVPlayerItemStatus::Failed) {
+        let msg = current
+            .and_then(|item| unsafe { item.error() })
             .map(|e| format!("播放失败: {}", e.localizedDescription()))
             .unwrap_or_else(|| "播放器准备失败".to_string());
         close_session(&st.session);
         return WatchOutcome::Failed(msg);
     }
-    let pstatus = unsafe { st.session.player.status() };
-    if istatus == AVPlayerItemStatus::ReadyToPlay && pstatus == AVPlayerStatus::ReadyToPlay {
+    if istatus == Some(AVPlayerItemStatus::ReadyToPlay)
+        && pstatus == AVPlayerStatus::ReadyToPlay
+        && lstatus == AVPlayerLooperStatus::Ready
+    {
         let mut session = st.session;
         session.phase = Phase::Playing;
         unsafe { session.player.setMuted(session.assignment.muted) };
