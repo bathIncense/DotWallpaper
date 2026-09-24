@@ -292,7 +292,7 @@
 - [x] 发现首次引导/设置 CSS 没有从 Vue 入口导入；修复构建入口、低高度滚动布局，真实管理窗口的设置弹层已打开并显示目录、权限说明、默认播放和配置路径。
 - [x] 只读 AVFoundation 探针针对当前视频：looper/player/currentItem 状态为 Ready，template 状态为 Unknown；说明旧模板检查会误报超时。应用改为检查实际项和三种失败状态。
 - [ ] **应用内实际应用视频**，确认桌面图层循环、状态事件、暂停/恢复、退出后的海报；此次未更改用户现有桌面分配，不把只读探针算作此项通过。
-- [ ] 重新选择当前媒体目录并确认扫描成功；本机 `sample` 显示 `dw_list_media` 阻塞于系统 `opendir`，界面 15 秒后提示超时。旧目录仍可能需要系统权限或文件提供程序恢复。
+- [x] 本机 `sample` 曾显示 `dw_list_media` 阻塞于系统 `opendir`，界面 15 秒后提示超时；通过设置中的原生选择器**重新选回同一个目录**后，界面加载 90 项媒体并更新列表（未更换目录或删除文件）。
 - [ ] 在首次启动的独立用户配置中，实测窄窗口及低窗口高度下引导选择/跳过，并确认保存设置。
 
 复核命令：`npm --prefix ui run build`（含 2 项内联回归测试）、`cargo test --manifest-path rust-core/Cargo.toml`（16/16）、`cargo clippy --manifest-path rust-core/Cargo.toml --all-targets -- -D warnings`、`npm run build:mac:app` 均通过。DMG 在本轮没有重新制作，不应当作当前版本。
