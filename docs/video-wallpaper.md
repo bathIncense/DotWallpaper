@@ -2,6 +2,14 @@
 
 本文记录当前版本的视频壁纸行为、使用方法和验收边界。内容限定于仓库中已实现的 macOS 原生路径；构建或单元测试通过不等于 GUI 播放已验收。
 
+## 2026-09-24 当前修复与验证状态
+
+- 修复管理窗口白屏：原生 `WKWebView` 加载 `Contents/Resources/dist/index.html` 时，旧代码把读取范围错误限制为用户 Home 目录；当前构建使用应用明确的非沙盒文件访问边界 `/`，同时覆盖内置前端资源和用户通过原生选择器授权的媒体绝对路径，并增加前端加载成功/失败日志。
+- 当前验证产物：`build/xcode-derived/Build/Products/Release/WallpaperEngine.app`，已通过 Xcode Release 构建、arm64 检查、macOS 26.0 最低版本检查和 ad-hoc 严格签名验证；已复制到 `/Applications/WallpaperEngine.app` 启动，进程保持运行。
+- Rust 核心单元测试 18 项通过，Clippy 使用 `-D warnings` 通过；显示器监视回调已增加主线程安全异常隔离，release profile 使用 `panic = "unwind"`，避免可恢复的热插拔/休眠状态异常直接终止宿主进程。
+- 当前机器处于锁屏状态，无法完成窗口截图、菜单栏操作和桌面视频画面观察；因此本次只确认“当前 `/Applications` 构建可启动且没有新增崩溃报告”，不把真实视频播放、无缝循环或多显示器切换写成已验收。
+- 旧 DMG/挂载卷版本的崩溃报告不能代表当前构建；请退出旧进程后，使用上面的 `.app` 路径重新验证。重新生成 DMG 需执行 `npm run release:mac`，构建 `.app` 不会自动更新旧 DMG。
+
 > 2026 年 9 月 24 日修复记录：旧构建曾因 SwiftUI `WindowGroup` 场景恢复状态导致进程仍在运行但窗口数为 0，看起来像“打不开”。当前 macOS 原生入口改为由 `AppDelegate` 显式创建并持有主窗口：启动时强制显示、关闭时只隐藏、从菜单栏或 Dock 重新打开；即使壁纸恢复较慢或核心返回错误，管理窗口也先可用。
 >
 > 同日视频启动修复：旧构建曾在主线程调度和视频控制错误路径触发 Rust `expect`，表现为打开后立即退出/报 Abort trap。当前代码已改为 CoreFoundation 主线程 RunLoop 调度，并将视频路径及缩略图/设置全局锁的关键断言改为可恢复错误路径。随后又修复了设置监视线程中的 `Option::expect`，避免启动阶段的可恢复配置状态触发 `SIGABRT`。在 2026 年 9 月 24 日 14:12（CST）重新构建并从 `build/xcode-derived/Build/Products/Release/WallpaperEngine.app` 冷启动，保持单个 `WallpaperEngine` 进程运行至少 12 秒，且没有生成新的崩溃报告。此前 10:46 的 `SIGABRT` 报告来自旧构建路径中的 `dispatch_sync` 主线程调度代码；不要继续启动旧 DMG 或旧 Finder 副本。当前构建已通过启动烟测，但因为当前机器处于锁屏状态，窗口、菜单栏和真实视频播放仍未完成 GUI 验收。
