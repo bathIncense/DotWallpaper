@@ -210,9 +210,16 @@ struct WebViewRepresentable: NSViewRepresentable {
         bridge.install(on: webView)
 
         if let distURL = Bundle.main.url(forResource: "index", withExtension: "html", subdirectory: "dist") {
-            // The core returns user-selected absolute paths. The app is not sandboxed,
-            // and the home directory is the narrowest stable read scope for WKWebView.
-            webView.loadFileURL(distURL, allowingReadAccessTo: URL(fileURLWithPath: NSHomeDirectory()))
+            // The frontend is bundled under Contents/Resources/dist, while the native
+            // core returns absolute paths for the user's selected media library. The
+            // app intentionally runs unsandboxed, so the file URL read scope must cover
+            // both locations; using ~/ here makes the bundled UI load as a blank page
+            // when the app is installed outside the user's home directory.
+            let fileReadScope = URL(fileURLWithPath: "/", isDirectory: true)
+            NSLog("[WallpaperEngine] loading frontend: %@ (read scope: %@)", distURL.path, fileReadScope.path)
+            webView.loadFileURL(distURL, allowingReadAccessTo: fileReadScope)
+        } else {
+            NSLog("[WallpaperEngine] frontend resource missing: dist/index.html")
         }
         return webView
     }
@@ -223,5 +230,25 @@ struct WebViewRepresentable: NSViewRepresentable {
         Coordinator()
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate {}
+    final class Coordinator: NSObject, WKNavigationDelegate {
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            NSLog("[WallpaperEngine] WebView loaded: %@", webView.url?.absoluteString ?? "unknown")
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            didFail navigation: WKNavigation!,
+            withError error: Error
+        ) {
+            NSLog("[WallpaperEngine] WebView load failed: %@", error.localizedDescription)
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            didFailProvisionalNavigation navigation: WKNavigation!,
+            withError error: Error
+        ) {
+            NSLog("[WallpaperEngine] WebView provisional load failed: %@", error.localizedDescription)
+        }
+    }
 }
