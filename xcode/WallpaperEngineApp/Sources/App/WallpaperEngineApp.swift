@@ -3,14 +3,9 @@ import AppKit
 
 @main
 struct DotWallpaperApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
-        WindowGroup {
-            ContentView()
-                .frame(minWidth: 800, minHeight: 480)
-        }
-
         Settings {
             NativeSettingsView()
         }
@@ -101,9 +96,10 @@ private struct NativeSettingsView: View {
     }
 }
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var statusItem: NSStatusItem?
     let core = DotWallpaperCore.shared
+    private var mainWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Setup menu bar
@@ -112,7 +108,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Setup close-to-hide
         NSApp.setActivationPolicy(.regular)
 
-        // Start core
+        // Create the window before restoring wallpapers. If a media file or
+        // display service is slow or unavailable, the management UI must still
+        // be reachable so the user can fix the configuration.
+        showWindow()
         core.startup()
     }
 
@@ -121,11 +120,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag {
-            for window in NSApp.windows {
-                window.makeKeyAndOrderFront(self)
-            }
-        }
+        showWindow()
         return true
     }
 
@@ -170,10 +165,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func showWindow() {
-        for window in NSApp.windows {
-            window.makeKeyAndOrderFront(self)
+        if let mainWindow {
+            mainWindow.makeKeyAndOrderFront(self)
+            NSApp.activate(ignoringOtherApps: true)
+            return
         }
+
+        let content = ContentView()
+            .frame(minWidth: 800, minHeight: 480)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1080, height: 700),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "WallpaperEngine"
+        window.minSize = NSSize(width: 800, height: 480)
+        window.contentViewController = NSHostingController(rootView: content)
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        window.center()
+        mainWindow = window
+        window.makeKeyAndOrderFront(self)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        // Closing the main window hides the UI but keeps the menu-bar app and
+        // active wallpapers alive. The status-item menu can open it again.
+        sender.orderOut(self)
+        return false
     }
 
     @objc func pauseAll() {
