@@ -28,6 +28,13 @@ final class WebViewBridge: NSObject, ObservableObject {
             self?.sendEvent(name: "wallpaper-state", json: json)
         })
         observers.append(NotificationCenter.default.addObserver(
+            forName: .dotWallpaperSettingsChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.sendEvent(name: "settings-changed", json: "{}")
+        })
+        observers.append(NotificationCenter.default.addObserver(
             forName: .dotWallpaperThumbReady,
             object: nil,
             queue: .main

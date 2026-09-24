@@ -61,6 +61,7 @@ function errToast(prefix: string, err: unknown) {
 
 // ---------- 后端事件绑定（模块级单例，幂等） ----------
 let eventsBound = false;
+let settingsEventBound = false;
 
 /// 重取快照：显示器列表只在快照里刷新，热插拔后必须主动重取，否则界面拿着过期列表
 /// （拔掉的屏还在下拉里、重连的屏的 ID 又变了）。定义在模块作用域，事件监听才用得到。
@@ -208,6 +209,11 @@ export function useApp() {
     if (onboardingCompleted.value) await loadMedia();
   }
 
+  if (!settingsEventBound) {
+    settingsEventBound = true;
+    onNativeEvent("settings-changed", () => { void refreshAll(); });
+  }
+
   // ---- 目录 / 导入 / 删除 ----
   async function saveSettings(): Promise<boolean> {
     try {
@@ -225,7 +231,7 @@ export function useApp() {
 
   async function pickFolder(): Promise<boolean> {
     try {
-      // 目录由 pick_library_directory 自己落盘并授权 asset scope，这里只更新界面
+      // 目录由原生选择器授权并由 Rust 持久化；成功后这里只更新界面
       const dir = await api.pickLibraryDirectory();
       if (!dir) return false;
       libraryDir.value = dir;

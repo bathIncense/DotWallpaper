@@ -238,4 +238,5 @@ class DotWallpaperCore {
 extension Notification.Name {
     static let dotWallpaperStateUpdate = Notification.Name("dotWallpaperStateUpdate")
     static let dotWallpaperThumbReady = Notification.Name("dotWallpaperThumbReady")
+    static let dotWallpaperSettingsChanged = Notification.Name("dotWallpaperSettingsChanged")
 }
