@@ -14,6 +14,7 @@ final class WebViewBridge: NSObject, ObservableObject {
     weak var webView: WKWebView?
     let core = DotWallpaperCore.shared
     private var installed = false
+    private let mediaQueue = DispatchQueue(label: "com.dot.wallpaper.media", qos: .userInitiated, attributes: .concurrent)
     private var observers: [NSObjectProtocol] = []
 
     override init() {
@@ -60,7 +61,12 @@ final class WebViewBridge: NSObject, ObservableObject {
         case "getAppSnapshot":
             reply(requestId, core.getAppSnapshot())
         case "listMedia":
-            reply(requestId, core.listMedia())
+            // Recursive scans and thumbnail prefetch may wait for filesystem I/O
+            // and AVFoundation on the main thread. Never block WebKit's callback.
+            mediaQueue.async { [weak self] in
+                guard let self else { return }
+                self.reply(requestId, self.core.listMedia())
+            }
         case "listDisplays":
             reply(requestId, core.listDisplays())
         case "applyWallpaper":

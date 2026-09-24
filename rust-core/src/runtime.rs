@@ -36,10 +36,10 @@ pub fn on_main<T: Send + 'static>(
             let _ = tx.send(result);
         });
 
-        // AppKit and AVFoundation require the actual libdispatch main queue. A
-        // global QoS queue is not the macOS main thread, even when it has the
-        // highest priority, and would make MainThreadMarker::new() panic.
-        dispatch2::DispatchQueue::main().exec_sync(task);
+        // dispatch_sync(main) can execute its block on the calling thread as
+        // an optimization, even though it owns the main queue. AppKit needs
+        // the actual main thread; enqueue asynchronously, then wait here.
+        dispatch2::DispatchQueue::main().exec_async(task);
 
         rx.recv().map_err(|e| format!("主线程结果丢失: {e}"))
     }

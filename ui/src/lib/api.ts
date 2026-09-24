@@ -15,10 +15,12 @@ type NativeResponseEvent = CustomEvent<{ id: string; payload: unknown }>;
 type NativeEvent = CustomEvent<{ name: string; payload: unknown }>;
 
 let requestSeq = 0;
-const pending = new Map<
-  string,
-  { resolve: (value: unknown) => void; reject: (reason: unknown) => void }
->();
+type PendingRequest = {
+  resolve: (value: unknown) => void;
+  reject: (reason: unknown) => void;
+  timer?: number;
+};
+const pending = new Map<string, PendingRequest>();
 
 if (typeof window !== "undefined") {
   window.addEventListener("dotwallpaper-response", (event) => {
@@ -26,6 +28,7 @@ if (typeof window !== "undefined") {
     const request = pending.get(id);
     if (!request) return;
     pending.delete(id);
+    if (request.timer !== undefined) window.clearTimeout(request.timer);
     const error = payload && typeof payload === "object" && "error" in payload
       ? (payload as NativePayload).error
       : undefined;
@@ -37,6 +40,7 @@ if (typeof window !== "undefined") {
 function invokeNative<T>(
   action: string,
   params: NativePayload = {},
+  timeoutMs?: number,
 ): Promise<T> {
   const native = typeof window === "undefined" ? undefined : window.DotWallpaperNative;
   if (!native) {
@@ -45,8 +49,24 @@ function invokeNative<T>(
 
   const id = `request-${Date.now()}-${++requestSeq}`;
   return new Promise<T>((resolve, reject) => {
-    pending.set(id, { resolve: resolve as (value: unknown) => void, reject });
-    native.invoke(action, { ...params, requestId: id });
+    const request: PendingRequest = {
+      resolve: resolve as (value: unknown) => void,
+      reject,
+    };
+    if (timeoutMs !== undefined) {
+      request.timer = window.setTimeout(() => {
+        pending.delete(id);
+        reject(new Error("读取壁纸目录超时，请在设置中重新选择文件夹或稍后重试"));
+      }, timeoutMs);
+    }
+    pending.set(id, request);
+    try {
+      native.invoke(action, { ...params, requestId: id });
+    } catch (error) {
+      pending.delete(id);
+      if (request.timer !== undefined) window.clearTimeout(request.timer);
+      reject(error);
+    }
   });
 }
 
@@ -61,7 +81,7 @@ export function onNativeEvent<T>(name: string, handler: (payload: T) => void): (
 
 export const api = {
   getAppSnapshot: () => invokeNative<AppSnapshot>("getAppSnapshot"),
-  listMedia: () => invokeNative<MediaItem[]>("listMedia").then((p) => p as unknown as MediaItem[]),
+  listMedia: () => invokeNative<MediaItem[]>("listMedia", {}, 15000).then((p) => p as unknown as MediaItem[]),
   listDisplays: () => invokeNative<DisplayInfo[]>("listDisplays").then((p) => p as unknown as DisplayInfo[]),
   applyWallpaper: (assignment: WallpaperAssignment) =>
     invokeNative<DisplayWallpaperState>("applyWallpaper", { assignment: JSON.stringify(assignment) })

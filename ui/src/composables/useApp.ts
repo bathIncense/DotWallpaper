@@ -202,7 +202,9 @@ export function useApp() {
 
   async function refreshAll() {
     await loadSnapshot();
-    await loadMedia();
+    // A migrated library may need a new macOS directory grant. Let the first-run
+    // picker render before touching Documents rather than blocking on TCC I/O.
+    if (onboardingCompleted.value) await loadMedia();
   }
 
   // ---- 目录 / 导入 / 删除 ----
@@ -339,6 +341,7 @@ export function useApp() {
   async function completeOnboarding() {
     onboardingCompleted.value = true;
     await saveSettings();
+    if (libraryDir.value && !media.value.length) void loadMedia();
   }
 
   function setDragging(v: boolean) {

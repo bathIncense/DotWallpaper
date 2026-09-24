@@ -65,7 +65,7 @@ npm run dev
 
 ```bash
 npm run build:mac:app
-open build/xcode-derived/Build/Products/Release/WallpaperEngine.app
+open "$(pwd)/build/xcode-derived/Build/Products/Release/WallpaperEngine.app"
 ```
 
 运行离线检查：
@@ -104,3 +104,9 @@ npm run release:mac
 ## 当前验证边界
 
 构建成功与单元测试通过不能替代真实 GUI 和壁纸播放验收。多显示器热插拔、休眠唤醒、长时间播放、首次启动引导和目录授权、菜单栏交互、Mission Control 表现，以及 Developer ID + 公证的正向发布链路，仍需在目标机器和对应签名环境中验证。
+
+## 启动故障与排查（2026-09-24）
+
+本机已修复管理窗口空白、后台线程调用 AppKit 导致的崩溃，并将媒体扫描移出 WebKit 主线程。请从仓库根目录执行上面的完整路径 `open` 命令；**不要打开旧的 `build/WallpaperEngine.app`**（旧生成物已移到 `build/legacy-artifacts/`，不参与构建）。首次打开时，引导应先出现；请用系统目录选择器重新选择媒体库，让 macOS 授予当前原生应用该目录的访问权限。若目录读取超过 15 秒，会显示错误而不是永久转圈，可重新选目录或稍后重试。
+
+已实际看到修复后的管理窗口和首次引导；尚未实际完成目录授权、菜单栏控制和视频壁纸播放验收。默认 ad-hoc 签名 DMG 仅供本机/内部验证。

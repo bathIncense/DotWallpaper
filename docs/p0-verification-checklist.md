@@ -274,3 +274,14 @@
 **验证日期：** ___________
 **macOS 版本：** ___________
 **设备型号：** ___________
+
+## 原生启动故障复核（2026-09-24）
+
+- [x] 修复空白窗口：Vite 内联 bundle 从 `<head>` 移到 `#app` 后；构建阶段加入回归测试，缺少根节点会失败，不再默默发出空白包。
+- [x] 修复 `MainThreadMarker` panic：后台调用 AppKit 的工作异步投递到真正的 main queue，然后等待结果；旧同步派发可能在调用线程执行。
+- [x] 媒体扫描转后台；未完成首次引导时不抢先扫描旧目录，扫描超时 15 秒向界面报错，可选新目录重试。本机旧目录读取曾在 `opendir` 阻塞数分钟，并非已经完成扫描的证据。
+- [x] 本机真实打开 Xcode 27 原生 `.app`，确认管理界面、首次引导和显示器选择器可见；UI 构建（含 2 项回归测试）、Rust 16/16、Xcode 构建、签名自检和 DMG 校验通过。
+- [ ] 用原生文件夹选择器完成目录授权，并确认原目录缩略图加载。
+- [ ] 应用实际视频，验收播放、暂停/恢复、关窗后菜单栏控制和退出清理。
+
+唯一当前产物：`build/xcode-derived/Build/Products/Release/WallpaperEngine.app` 与 `build/WallpaperEngine_0.1.2_arm64.dmg`。旧的 `build/WallpaperEngine.app` 和 `aarch64.dmg` 已移入忽略的 `build/legacy-artifacts/`，不可用作验收。上方 2026-09-23 验证状态是历史记录，以本节最新状态为准。
