@@ -29,6 +29,7 @@ const selectedDisplayId = ref("");
 const fitMode = ref<FitMode>("fill");
 const muted = ref(true);
 const onboardingCompleted = ref(false);
+let onboardingFolderChosen = false;
 const snapshotReady = ref(false);
 const loadingMedia = ref(false);
 const mediaError = ref("");
@@ -228,7 +229,13 @@ export function useApp() {
       const dir = await api.pickLibraryDirectory();
       if (!dir) return false;
       libraryDir.value = dir;
-      await loadMedia(false);
+      if (onboardingCompleted.value) {
+        await loadMedia(false);
+      } else {
+        // The native picker has already persisted the selected directory.
+        // Do not hold the setup modal open while a media scan waits on TCC I/O.
+        onboardingFolderChosen = true;
+      }
       toast(`已切换到 ${dir}`, "success");
       return true;
     } catch (err) {
@@ -345,6 +352,10 @@ export function useApp() {
     if (!await saveSettings()) {
       onboardingCompleted.value = false;
       return false;
+    }
+    if (onboardingFolderChosen) {
+      onboardingFolderChosen = false;
+      void loadMedia(false);
     }
     return true;
   }

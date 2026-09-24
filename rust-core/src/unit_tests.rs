@@ -234,6 +234,47 @@ mod tests {
     }
 
     #[test]
+    fn settings_update_reports_disk_failure_and_rolls_back() {
+        let _guard = serialize();
+        let dir = scratch_dir("settings-durable");
+        let blocked_parent = dir.join("not-a-directory");
+        std::fs::write(&blocked_parent, b"file").unwrap();
+        let original = AppSettings::default();
+        settings::init_for_test(blocked_parent.join("settings.json"), original.clone());
+        let error = settings::update_checked(|s| s.onboarding_completed = true)
+            .expect_err("cannot persist settings under a regular file");
+        assert!(error.contains("配置目录"));
+        assert_eq!(settings::get(), original);
+
+        let valid_path = dir.join("settings.json");
+        settings::init_for_test(valid_path.clone(), original);
+        let updated = settings::update_checked(|s| s.onboarding_completed = true).unwrap();
+        assert!(updated.onboarding_completed);
+        assert!(settings::load_from(&valid_path).onboarding_completed);
+    }
+
+    #[test]
+    fn library_selection_persists_only_valid_directories() {
+        let _guard = serialize();
+        let root = scratch_dir("library-selection");
+        let config = root.join("config.json");
+        let library = root.join("chosen");
+        std::fs::create_dir_all(&library).unwrap();
+        settings::init_for_test(config.clone(), AppSettings::default());
+
+        let selected = settings::set_library_directory(&library.to_string_lossy()).unwrap();
+        assert_eq!(selected, library.canonicalize().unwrap().to_string_lossy());
+        assert_eq!(settings::get().library_dir, selected);
+        assert_eq!(settings::load_from(&config).library_dir, selected);
+
+        let file = root.join("not-a-directory");
+        std::fs::write(&file, b"file").unwrap();
+        assert!(settings::set_library_directory(&file.to_string_lossy()).is_err());
+        assert_eq!(settings::get().library_dir, selected);
+        assert_eq!(settings::load_from(&config).library_dir, selected);
+    }
+
+    #[test]
     fn scan_ignores_symlinks_instead_of_recursing_or_listing_them() {
         let dir = scratch_dir("scanlink").canonicalize().unwrap();
         let real = dir.join("real.jpg");

@@ -59,7 +59,9 @@ pub fn init_with_path(config_dir: PathBuf) {
     }
     let mut store = STORE.lock().expect("settings lock");
     *store = Some(Store { path, settings });
-    save_locked(store.as_mut().expect("just initialized"));
+    if let Err(error) = save_locked(store.as_mut().expect("just initialized")) {
+        eprintln!("[settings] 初始化保存失败: {error}");
+    }
 }
 
 pub(crate) fn load_from(path: &std::path::Path) -> AppSettings {
@@ -121,28 +123,57 @@ pub fn get() -> AppSettings {
         .unwrap_or_default()
 }
 
-fn save_locked(store: &mut Store) {
+fn save_locked(store: &mut Store) -> Result<(), String> {
     if let Some(parent) = store.path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建配置目录失败: {e}"))?;
     }
-    let Ok(text) = serde_json::to_string_pretty(&store.settings) else {
-        return;
-    };
+    let text = serde_json::to_string_pretty(&store.settings)
+        .map_err(|e| format!("序列化设置失败: {e}"))?;
     let tmp = store.path.with_extension("json.tmp");
-    let result = std::fs::write(&tmp, &text).and_then(|()| std::fs::rename(&tmp, &store.path));
+    let result = std::fs::write(&tmp, text).and_then(|()| std::fs::rename(&tmp, &store.path));
     if let Err(e) = result {
         let _ = std::fs::remove_file(&tmp);
-        eprintln!("[settings] 保存失败: {e}");
+        return Err(format!("保存设置文件失败: {e}"));
     }
+    Ok(())
+}
+
+/// UI-originated updates must not claim success if the new settings are not durable.
+/// Revert the in-memory copy when the atomic file replacement fails.
+pub fn update_checked<F: FnOnce(&mut AppSettings)>(f: F) -> Result<AppSettings, String> {
+    let mut guard = STORE.lock().map_err(|e| format!("配置锁不可用: {e}"))?;
+    let store = guard.as_mut().ok_or("配置尚未初始化")?;
+    let previous = store.settings.clone();
+    f(&mut store.settings);
+    store.settings.version = SETTINGS_VERSION;
+    if let Err(error) = save_locked(store) {
+        store.settings = previous;
+        return Err(error);
+    }
+    Ok(store.settings.clone())
 }
 
 pub fn update<F: FnOnce(&mut AppSettings)>(f: F) -> AppSettings {
-    let mut guard = STORE.lock().expect("settings lock");
-    let store = guard.as_mut().expect("settings not init");
-    f(&mut store.settings);
-    store.settings.version = SETTINGS_VERSION;
-    save_locked(store);
-    store.settings.clone()
+    match update_checked(f) {
+        Ok(settings) => settings,
+        Err(error) => {
+            eprintln!("[settings] {error}");
+            get()
+        }
+    }
+}
+
+/// Persist the directory selected by the native open panel before the UI claims success.
+/// The path is checked here so a stale or inaccessible selection cannot replace a valid library.
+pub fn set_library_directory(path: &str) -> Result<String, String> {
+    let canonical =
+        std::fs::canonicalize(path).map_err(|e| format!("无法访问所选目录 {path}: {e}"))?;
+    if !canonical.is_dir() {
+        return Err(format!("所选路径不是文件夹: {}", canonical.display()));
+    }
+    let dir = canonical.to_string_lossy().into_owned();
+    update_checked(|settings| settings.library_dir = dir.clone())?;
+    Ok(dir)
 }
 
 pub fn record_assignment(assignment: &WallpaperAssignment) {

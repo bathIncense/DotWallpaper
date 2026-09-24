@@ -17,9 +17,9 @@ typedef void (*FfiStateCallback)(const char*);
 typedef void (*FfiThumbCallback)(const char*, const char*);
 
 /**
- * Directory pick callback: receives path string or null on cancel
+ * Directory pick callback: (persisted path, error); both null on cancel
  */
-typedef void (*FfiStringCallback)(const char*);
+typedef void (*FfiDirectoryCallback)(const char*, const char*);
 
 /**
  * File pick callback: receives JSON array of paths or null on cancel
@@ -93,9 +93,9 @@ int32_t dw_update_settings(const char *settings_json);
 
 /**
  * Pick library directory via native dialog.
- * `cb` is called with the selected path (or null on cancel).
+ * `cb` receives the persisted path, or an error; both null on cancel.
  */
-void dw_pick_library_directory(FfiStringCallback cb);
+void dw_pick_library_directory(FfiDirectoryCallback cb);
 
 /**
  * Pick media files via native dialog.

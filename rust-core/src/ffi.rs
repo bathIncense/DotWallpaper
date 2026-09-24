@@ -17,8 +17,8 @@ pub type FfiStateCallback = extern "C" fn(*const std::ffi::c_char);
 /// Thumbnail ready callback: receives (path_json, thumb_json)
 pub type FfiThumbCallback = extern "C" fn(*const std::ffi::c_char, *const std::ffi::c_char);
 
-/// Directory pick callback: receives path string or null on cancel
-pub type FfiStringCallback = extern "C" fn(*const std::ffi::c_char);
+/// Directory pick callback: (persisted path, error); both null on cancel.
+pub type FfiDirectoryCallback = extern "C" fn(*const std::ffi::c_char, *const std::ffi::c_char);
 
 /// File pick callback: receives JSON array of paths or null on cancel
 pub type FfiStringArrayCallback = extern "C" fn(*const std::ffi::c_char);
@@ -281,7 +281,7 @@ pub unsafe extern "C" fn dw_update_settings(settings_json: *const std::ffi::c_ch
     };
 
     let was_onboarded = crate::settings::get().onboarding_completed;
-    let updated = crate::settings::update(|s| {
+    let updated = crate::settings::update_checked(|s| {
         if let Some(fit) = req.default_fit_mode {
             s.default_fit_mode = fit;
         }
@@ -292,6 +292,13 @@ pub unsafe extern "C" fn dw_update_settings(settings_json: *const std::ffi::c_ch
             s.onboarding_completed = completed;
         }
     });
+    let updated = match updated {
+        Ok(settings) => settings,
+        Err(error) => {
+            set_last_error(&error);
+            return -1;
+        }
+    };
     if !was_onboarded && updated.onboarding_completed {
         // Startup intentionally skipped existing assignments during setup.
         crate::engine::restore_on_startup();
@@ -300,19 +307,27 @@ pub unsafe extern "C" fn dw_update_settings(settings_json: *const std::ffi::c_ch
     0
 }
 
-/// Pick library directory via native dialog.
-/// `cb` is called with the selected path (or null on cancel).
+/// Pick and persist a library directory via native dialog. An unsuccessful write is
+/// an error, not a successful selection that disappears after restarting.
 #[no_mangle]
-pub extern "C" fn dw_pick_library_directory(cb: FfiStringCallback) {
-    // This must run on main thread for NSOpenPanel
-    let _ = crate::runtime::on_main(move |_mtm| {
-        if let Some(dir) = crate::desktop::pick_directory(_mtm) {
-            let c_str = CString::new(dir).unwrap_or_default();
-            cb(c_str.as_ptr());
-        } else {
-            cb(std::ptr::null());
-        }
+pub extern "C" fn dw_pick_library_directory(cb: FfiDirectoryCallback) {
+    let result = crate::runtime::on_main(move |mtm| match crate::desktop::pick_directory(mtm) {
+        None => cb(std::ptr::null(), std::ptr::null()),
+        Some(path) => match crate::settings::set_library_directory(&path) {
+            Ok(saved) => {
+                let path = CString::new(saved).unwrap_or_default();
+                cb(path.as_ptr(), std::ptr::null());
+            }
+            Err(error) => {
+                let message = CString::new(error).unwrap_or_default();
+                cb(std::ptr::null(), message.as_ptr());
+            }
+        },
     });
+    if let Err(error) = result {
+        let message = CString::new(error).unwrap_or_default();
+        cb(std::ptr::null(), message.as_ptr());
+    }
 }
 
 /// Pick media files via native dialog.

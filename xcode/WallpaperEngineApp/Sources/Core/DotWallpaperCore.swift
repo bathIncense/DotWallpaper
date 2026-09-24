@@ -8,7 +8,7 @@ class DotWallpaperCore {
     private var initialized = false
 
     // Pending completions for pick operations
-    private static var pendingDirectoryCompletion: ((String?) -> Void)?
+    private static var pendingDirectoryCompletion: ((String?, String?) -> Void)?
     private static var pendingFilesCompletion: ((String?) -> Void)?
 
     init() {
@@ -148,23 +148,20 @@ class DotWallpaperCore {
         return ptr.map { String(cString: $0) }
     }
 
-    func pickLibraryDirectory(completion: @escaping (String?) -> Void) {
+    func pickLibraryDirectory(completion: @escaping (String?, String?) -> Void) {
         guard initialized else {
-            completion(nil)
+            completion(nil, "原生核心尚未初始化")
             return
         }
 
         DotWallpaperCore.pendingDirectoryCompletion = completion
 
-        dw_pick_library_directory { ptr in
+        dw_pick_library_directory { pathPtr, errorPtr in
             guard let completion = DotWallpaperCore.pendingDirectoryCompletion else { return }
             DotWallpaperCore.pendingDirectoryCompletion = nil
-            if let ptr = ptr {
-                let path = String(cString: ptr)
-                DispatchQueue.main.async { completion(path) }
-            } else {
-                DispatchQueue.main.async { completion(nil) }
-            }
+            let path = pathPtr.map { String(cString: $0) }
+            let error = errorPtr.map { String(cString: $0) }
+            DispatchQueue.main.async { completion(path, error) }
         }
     }
 

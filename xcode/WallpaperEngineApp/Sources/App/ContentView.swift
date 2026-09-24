@@ -109,9 +109,13 @@ final class WebViewBridge: NSObject, ObservableObject {
                 replyError(requestId, core.lastError() ?? "删除媒体失败")
             }
         case "pickLibraryDirectory":
-            core.pickLibraryDirectory { [weak self] path in
-                let value = path.map(Self.jsonString) ?? "null"
-                self?.reply(requestId, "{\"pickedDirectory\":\(value)}")
+            core.pickLibraryDirectory { [weak self] path, error in
+                if let error {
+                    self?.replyError(requestId, error)
+                } else {
+                    let value = path.map(Self.jsonString) ?? "null"
+                    self?.reply(requestId, "{\"pickedDirectory\":\(value)}")
+                }
             }
         case "pickMediaFiles":
             core.pickMediaFiles { [weak self] json in
