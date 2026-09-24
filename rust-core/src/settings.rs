@@ -61,8 +61,12 @@ pub fn init_with_path(config_dir: PathBuf) {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     *store = Some(Store { path, settings });
-    if let Err(error) = save_locked(store.as_mut().expect("just initialized")) {
-        eprintln!("[settings] 初始化保存失败: {error}");
+    // Do not use `expect` here: settings initialization runs during app startup,
+    // and a recoverable persistence error must never abort the native host.
+    if let Some(store_ref) = store.as_mut() {
+        if let Err(error) = save_locked(store_ref) {
+            eprintln!("[settings] 初始化保存失败: {error}");
+        }
     }
 }
 
@@ -117,9 +121,16 @@ fn migrate(mut s: AppSettings) -> AppSettings {
 }
 
 pub fn get() -> AppSettings {
-    STORE
-        .lock()
-        .expect("settings lock")
+    // A poisoned settings mutex should degrade to the last recoverable value,
+    // not panic on the monitor thread and terminate the whole macOS app.
+    let guard = match STORE.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            eprintln!("[settings] 配置锁已中毒，继续使用当前内存配置");
+            poisoned.into_inner()
+        }
+    };
+    guard
         .as_ref()
         .map(|s| s.settings.clone())
         .unwrap_or_default()
