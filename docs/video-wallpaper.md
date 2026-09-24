@@ -4,7 +4,7 @@
 
 > 2026 年 9 月 24 日修复记录：旧构建曾因 SwiftUI `WindowGroup` 场景恢复状态导致进程仍在运行但窗口数为 0，看起来像“打不开”。当前 macOS 原生入口改为由 `AppDelegate` 显式创建并持有主窗口：启动时强制显示、关闭时只隐藏、从菜单栏或 Dock 重新打开；即使壁纸恢复较慢或核心返回错误，管理窗口也先可用。
 >
-> 同日视频启动修复：旧构建曾在主线程调度和视频控制错误路径触发 Rust `expect`，表现为打开后立即退出/报 Abort trap。当前代码已改为 CoreFoundation 主线程 RunLoop 调度，并将视频路径及缩略图/设置全局锁的关键断言改为可恢复错误路径。随后又修复了设置监视线程中的 `Option::expect`，避免启动阶段的可恢复配置状态触发 `SIGABRT`。在 2026 年 9 月 24 日 14:03（CST）用最新 arm64 原生 app 冷启动，保持单个 `WallpaperEngine` 进程运行 8 秒，且没有生成新的崩溃报告；这证明本次启动烟测通过，但因为当前机器处于锁屏状态，窗口、菜单栏和真实视频播放仍未完成 GUI 验收。
+> 同日视频启动修复：旧构建曾在主线程调度和视频控制错误路径触发 Rust `expect`，表现为打开后立即退出/报 Abort trap。当前代码已改为 CoreFoundation 主线程 RunLoop 调度，并将视频路径及缩略图/设置全局锁的关键断言改为可恢复错误路径。随后又修复了设置监视线程中的 `Option::expect`，避免启动阶段的可恢复配置状态触发 `SIGABRT`。在 2026 年 9 月 24 日 14:12（CST）重新构建并从 `build/xcode-derived/Build/Products/Release/WallpaperEngine.app` 冷启动，保持单个 `WallpaperEngine` 进程运行至少 12 秒，且没有生成新的崩溃报告。此前 10:46 的 `SIGABRT` 报告来自旧构建路径中的 `dispatch_sync` 主线程调度代码；不要继续启动旧 DMG 或旧 Finder 副本。当前构建已通过启动烟测，但因为当前机器处于锁屏状态，窗口、菜单栏和真实视频播放仍未完成 GUI 验收。
 
 ## 当前实现
 
