@@ -43,7 +43,10 @@ static STATE_CB: OnceLock<Mutex<Option<StateCallback>>> = OnceLock::new();
 
 /// 注册状态变化回调
 pub fn set_state_callback(cb: StateCallback) {
-    let mut guard = STATE_CB.get_or_init(|| Mutex::new(None)).lock().unwrap();
+    let mut guard = STATE_CB
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     *guard = Some(cb);
 }
 

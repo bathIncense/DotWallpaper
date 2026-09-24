@@ -57,7 +57,9 @@ pub fn init_with_path(config_dir: PathBuf) {
     if settings.library_dir.trim().is_empty() {
         settings.library_dir = crate::runtime::picture_dir().to_string_lossy().to_string();
     }
-    let mut store = STORE.lock().expect("settings lock");
+    let mut store = STORE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     *store = Some(Store { path, settings });
     if let Err(error) = save_locked(store.as_mut().expect("just initialized")) {
         eprintln!("[settings] 初始化保存失败: {error}");
@@ -192,7 +194,9 @@ pub fn forget_assignment(display_id: &str) {
 
 #[cfg(test)]
 pub fn init_for_test(path: PathBuf, settings: AppSettings) {
-    let mut store = STORE.lock().expect("settings lock");
+    let mut store = STORE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     *store = Some(Store { path, settings });
 }
 

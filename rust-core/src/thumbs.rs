@@ -99,7 +99,9 @@ fn poster_slot() -> &'static Mutex<Instant> {
 
 fn wait_poster_slot() {
     loop {
-        let mut next = poster_slot().lock().expect("poster slot");
+        let mut next = poster_slot()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let now = Instant::now();
         if now >= *next {
             *next = now + POSTER_SPACING;
@@ -158,7 +160,10 @@ pub type ThumbCallback = extern "C" fn(*const std::ffi::c_char, *const std::ffi:
 static THUMB_CB: OnceLock<Mutex<Option<ThumbCallback>>> = OnceLock::new();
 
 pub fn set_thumb_callback(cb: ThumbCallback) {
-    let mut guard = THUMB_CB.get_or_init(|| Mutex::new(None)).lock().unwrap();
+    let mut guard = THUMB_CB
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     *guard = Some(cb);
 }
 
@@ -185,7 +190,9 @@ pub fn make_entries(items: Vec<(String, MediaKind)>) -> Vec<MediaItem> {
 
     let mut batch: Vec<(String, MediaKind)> = Vec::new();
     {
-        let mut inflight = inflight_set().lock().unwrap();
+        let mut inflight = inflight_set()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         for (p, k) in missing {
             if inflight.insert(p.clone()) {
                 batch.push((p, k));
@@ -208,7 +215,10 @@ pub fn make_entries(items: Vec<(String, MediaKind)>) -> Vec<MediaItem> {
             let results = Arc::clone(&results);
             let cache_t = cache_for_thread.clone();
             std::thread::spawn(move || loop {
-                let next = queue.lock().unwrap().pop_front();
+                let next = queue
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .pop_front();
                 let Some((src, kind)) = next else { break };
                 let thumb = ensure_thumb(&src, kind, &cache_t);
                 if let Some(t) = &thumb {
@@ -223,8 +233,14 @@ pub fn make_entries(items: Vec<(String, MediaKind)>) -> Vec<MediaItem> {
                         }
                     }
                 }
-                results.lock().unwrap().insert(src.clone(), thumb);
-                inflight_set().lock().unwrap().remove(&src);
+                results
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .insert(src.clone(), thumb);
+                inflight_set()
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .remove(&src);
             });
         }
         let prefetch: HashSet<String> = batch
@@ -235,7 +251,9 @@ pub fn make_entries(items: Vec<(String, MediaKind)>) -> Vec<MediaItem> {
         let deadline = Instant::now() + Duration::from_millis(PREFETCH_BUDGET_MS);
         loop {
             let done = {
-                let r = results.lock().unwrap();
+                let r = results
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 prefetch.iter().all(|p| r.contains_key(p))
             };
             if done || Instant::now() >= deadline {
@@ -243,7 +261,9 @@ pub fn make_entries(items: Vec<(String, MediaKind)>) -> Vec<MediaItem> {
             }
             std::thread::sleep(Duration::from_millis(60));
         }
-        let r = results.lock().unwrap();
+        let r = results
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         for (p, t) in r.iter() {
             if let Some(t) = t {
                 thumbs.insert(p.clone(), t.clone());
