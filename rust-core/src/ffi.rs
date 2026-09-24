@@ -280,7 +280,8 @@ pub unsafe extern "C" fn dw_update_settings(settings_json: *const std::ffi::c_ch
         }
     };
 
-    crate::settings::update(|s| {
+    let was_onboarded = crate::settings::get().onboarding_completed;
+    let updated = crate::settings::update(|s| {
         if let Some(fit) = req.default_fit_mode {
             s.default_fit_mode = fit;
         }
@@ -291,6 +292,10 @@ pub unsafe extern "C" fn dw_update_settings(settings_json: *const std::ffi::c_ch
             s.onboarding_completed = completed;
         }
     });
+    if !was_onboarded && updated.onboarding_completed {
+        // Startup intentionally skipped existing assignments during setup.
+        crate::engine::restore_on_startup();
+    }
 
     0
 }

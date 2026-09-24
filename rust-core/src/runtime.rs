@@ -1,9 +1,32 @@
 // 主线程调度：所有 AppKit/AVFoundation 对象只在 macOS 主线程访问。
-// 使用 GCD dispatch 在主线程执行并等待结果。
+// 使用主线程 CFRunLoop 在真正的 macOS 主线程执行并等待结果。
 
 use objc2_foundation::MainThreadMarker;
 
-/// 初始化 runtime（GCD-based，无需额外初始化）
+#[cfg(not(test))]
+fn schedule_on_main(f: impl FnOnce() + Send + 'static) -> Result<(), String> {
+    use block2::RcBlock;
+    use objc2_core_foundation::{kCFRunLoopCommonModes, CFRunLoop, CFType};
+
+    let loop_ref = CFRunLoop::main().ok_or("无法获取主线程事件循环")?;
+    let mode = unsafe { kCFRunLoopCommonModes }.ok_or("无法获取主线程事件循环模式")?;
+    // CFRunLoopPerformBlock targets the actual main run loop. A GCD main-queue
+    // callback can run on a helper thread while the app is being launched,
+    // which cannot safely touch AppKit and previously aborted the process.
+    let task = std::sync::Mutex::new(Some(f));
+    let block = RcBlock::new(move || {
+        if let Some(f) = task.lock().ok().and_then(|mut task| task.take()) {
+            f();
+        }
+    });
+    // SAFETY: the mode is the system's common-mode CFString, and the copied
+    // block owns its Send closure until the main run loop invokes it.
+    unsafe { loop_ref.perform_block(Some(mode.as_ref() as &CFType), Some(&block)) };
+    loop_ref.wake_up();
+    Ok(())
+}
+
+/// 初始化 runtime（CFRunLoop-based，无需额外初始化）
 pub fn init() {}
 
 /// 在主线程执行并等待结果。已在主线程时直接内联执行（避免死锁）。
@@ -16,8 +39,7 @@ pub fn on_main<T: Send + 'static>(
 
     // Rust unit tests do not start NSApplication's main run loop. Keep their
     // pure validation paths synchronous instead of waiting forever on a main
-    // queue that is not being serviced. The production path below always uses
-    // the real macOS main queue.
+    // run loop that is not being serviced. Production uses the real main run loop.
     #[cfg(test)]
     {
         // SAFETY: test-only callers exercise logic that does not retain or
@@ -30,18 +52,15 @@ pub fn on_main<T: Send + 'static>(
     {
         let (tx, rx) = std::sync::mpsc::channel();
 
-        let task = Box::new(move || {
-            let mtm = MainThreadMarker::new().expect("must be on main thread");
-            let result = f(&mtm);
-            let _ = tx.send(result);
-        });
+        schedule_on_main(move || {
+            if let Some(mtm) = MainThreadMarker::new() {
+                let _ = tx.send(Ok(f(&mtm)));
+            } else {
+                let _ = tx.send(Err("主线程调度未运行在真正的主线程".to_string()));
+            }
+        })?;
 
-        // dispatch_sync(main) can execute its block on the calling thread as
-        // an optimization, even though it owns the main queue. AppKit needs
-        // the actual main thread; enqueue asynchronously, then wait here.
-        dispatch2::DispatchQueue::main().exec_async(task);
-
-        rx.recv().map_err(|e| format!("主线程结果丢失: {e}"))
+        rx.recv().map_err(|e| format!("主线程结果丢失: {e}"))?
     }
 }
 
@@ -60,12 +79,15 @@ pub fn on_main_async(f: impl FnOnce(&MainThreadMarker) + Send + 'static) {
 
     #[cfg(not(test))]
     {
-        // Do not use a global queue here: AppKit/AVFoundation objects must be
-        // created and touched on the actual macOS main thread.
-        dispatch2::DispatchQueue::main().exec_async(move || {
-            let mtm = MainThreadMarker::new().expect("must be on main thread");
-            f(&mtm);
-        });
+        if let Err(error) = schedule_on_main(move || {
+            if let Some(mtm) = MainThreadMarker::new() {
+                f(&mtm);
+            } else {
+                eprintln!("[runtime] 主线程调度异常：任务未执行");
+            }
+        }) {
+            eprintln!("[runtime] {error}");
+        }
     }
 }
 

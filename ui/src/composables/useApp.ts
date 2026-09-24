@@ -208,15 +208,17 @@ export function useApp() {
   }
 
   // ---- 目录 / 导入 / 删除 ----
-  async function saveSettings() {
+  async function saveSettings(): Promise<boolean> {
     try {
       await api.updateSettings({
         defaultFitMode: fitMode.value,
         defaultMuted: muted.value,
         onboardingCompleted: onboardingCompleted.value,
       });
+      return true;
     } catch (err) {
       errToast("保存设置失败", err);
+      return false;
     }
   }
 
@@ -338,10 +340,13 @@ export function useApp() {
     void saveSettings();
   }
 
-  async function completeOnboarding() {
+  async function completeOnboarding(): Promise<boolean> {
     onboardingCompleted.value = true;
-    await saveSettings();
-    if (libraryDir.value && !media.value.length) void loadMedia();
+    if (!await saveSettings()) {
+      onboardingCompleted.value = false;
+      return false;
+    }
+    return true;
   }
 
   function setDragging(v: boolean) {

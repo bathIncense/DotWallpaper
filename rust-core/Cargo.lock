@@ -25,7 +25,6 @@ checksum = "1e0e367e4e7da84520dedcac1901e4da967309406d1e51017ae1abfb97adbd38"
 dependencies = [
  "bitflags",
  "block2",
- "libc",
  "objc2",
 ]
 
@@ -33,10 +32,11 @@ dependencies = [
 name = "dotwallpaper"
 version = "0.1.2"
 dependencies = [
- "dispatch2",
+ "block2",
  "objc2",
  "objc2-app-kit",
  "objc2-av-foundation",
+ "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-core-media",
  "objc2-foundation",
@@ -177,7 +177,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a180dd8642fa45cdb7dd721cd4c11b1cadd4929ce112ebd8b9f5803cc79d536"
 dependencies = [
  "bitflags",
+ "block2",
  "dispatch2",
+ "libc",
  "objc2",
 ]
 

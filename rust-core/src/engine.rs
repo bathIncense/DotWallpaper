@@ -711,10 +711,25 @@ pub fn teardown_all_sync() {
 }
 
 /// 启动时恢复逐屏配置；缺失媒体标记错误，不阻塞其他显示器。
+static STARTUP_RESTORE_QUEUED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn restore_on_startup() {
+    // Completion of onboarding can race the 300ms startup delay. Enqueue the
+    // restore once, and never probe protected files while setup is open.
+    if !settings::get().onboarding_completed
+        || STARTUP_RESTORE_QUEUED.swap(true, std::sync::atomic::Ordering::AcqRel)
+    {
+        return;
+    }
     std::thread::spawn(|| {
         std::thread::sleep(Duration::from_millis(300));
         let s = settings::get();
+        // An existing configuration can be migrated into first-run setup. Never
+        // touch protected media before the user has seen the folder picker.
+        if !s.onboarding_completed {
+            return;
+        }
         for assignment in s.assignments.values() {
             let display_id = &assignment.display_id;
             let a = assignment.clone();
@@ -877,6 +892,9 @@ pub fn spawn_monitor() {
             }
 
             let s = settings::get();
+            if !s.onboarding_completed {
+                continue;
+            }
             for (id, a) in &s.assignments {
                 if a.kind != MediaKind::Video
                     || active.contains(id)

@@ -85,10 +85,7 @@ function onKeydown(e: KeyboardEvent) {
     </Teleport>
 
     <SettingsPanel v-if="settingsOpen" @close="settingsOpen = false" />
-    <Onboarding
-      v-if="app.snapshotReady.value && !app.onboardingCompleted.value"
-      @done="app.completeOnboarding()"
-    />
+    <Onboarding v-if="app.snapshotReady.value && !app.onboardingCompleted.value" />
     <Toaster />
   </div>
 </template>

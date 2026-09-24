@@ -11,11 +11,12 @@ crate-type = ["staticlib"]
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-dispatch2 = "0.3"
 
 # macOS AppKit / Foundation / CoreGraphics / AVFoundation
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
+block2 = "0.6"
+objc2-core-foundation = { version = "0.3", features = ["CFRunLoop", "block2"] }
 objc2-app-kit = "0.3"
 objc2-foundation = "0.3"
 objc2-av-foundation = { version = "0.3", features = [
