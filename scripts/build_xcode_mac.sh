@@ -48,9 +48,16 @@ case " $ARCHS " in
   *) echo "error: expected arm64 executable, got '$ARCHS'" >&2; exit 1 ;;
 esac
 
-# Xcode builds with CODE_SIGNING_ALLOWED=NO. Release packaging signs the final bundle.
+# Xcode builds with CODE_SIGNING_ALLOWED=NO, leaving the linker-signed executable
+# but not a valid sealed app bundle. Sign the entire bundle so the documented
+# build:mac:app -> open path is directly usable. The release script strips and
+# re-signs the final bundle (optionally with Developer ID) after this step.
+codesign --force -s - "$APP"
+codesign --verify --deep --strict --verbose=1 "$APP"
+
 echo
 echo "Xcode build succeeded"
 echo "app:  $APP"
 echo "arch: $ARCHS"
 echo "min:  $MIN_VERSION"
+echo "sign: ad-hoc (local build only)"
