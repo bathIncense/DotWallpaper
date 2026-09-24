@@ -322,13 +322,16 @@ fn build_session(
         unsafe { objc2::msg_send![objc2::class!(AVQueuePlayer), queuePlayerWithItems: &*items] };
     let looper = unsafe { AVPlayerLooper::playerLooperWithPlayer_templateItem(&player, &item) };
     let layer = unsafe { AVPlayerLayer::playerLayerWithPlayer(Some(&player)) };
-    unsafe {
-        let gravity = match a.fit_mode {
+    let gravity = unsafe {
+        match a.fit_mode {
             FitMode::Fill => objc2_av_foundation::AVLayerVideoGravityResizeAspectFill
-                .expect("AVLayerVideoGravityResizeAspectFill"),
-            FitMode::Fit => objc2_av_foundation::AVLayerVideoGravityResizeAspect
-                .expect("AVLayerVideoGravityResizeAspect"),
-        };
+                .ok_or("视频填充模式不可用")?,
+            FitMode::Fit => {
+                objc2_av_foundation::AVLayerVideoGravityResizeAspect.ok_or("视频适应模式不可用")?
+            }
+        }
+    };
+    unsafe {
         layer.setVideoGravity(gravity);
         player.setMuted(true);
     }
@@ -628,7 +631,9 @@ fn control_main(display_id: &str, action: ControlAction) -> Result<DisplayWallpa
             ControlAction::Pause => unsafe { session.player.pause() },
             ControlAction::Resume => unsafe { session.player.play() },
             ControlAction::Stop => {
-                let sess = map.remove(display_id).expect("just borrowed");
+                let Some(sess) = map.remove(display_id) else {
+                    return Err(format!("显示器 {display_id} 当前没有可停止的动态壁纸"));
+                };
                 bump_generation(display_id);
                 close_session(&sess);
                 return Ok(state_of(
