@@ -330,6 +330,13 @@
 - [ ] Mac 当前仍锁定，文件访问弹窗需用户亲自处理。**新产物尚未实际打开验收**：解锁后使用本轮 `.app`，观察超过 3 秒确认监视线程不崩溃；选择新目录、重启确认路径保持，扫描并应用 MP4/MOV，检查桌面真实画面/循环、暂停恢复、关窗后菜单栏控制与 800×480 引导。遇到错误保留弹窗原文及新增 `.ips`，不得以构建成功或界面“播放中”替代实际视频播放。
 - [ ] 解锁后还需在项目目录正常执行 `npm --prefix ui run build` 与 `npm run release:mac`，不能将临时构建 shim 当成正式构建配置。
 
+## 2026-09-24 视频错误路径防中止加固（本轮）
+
+- [x] 修复视频会话创建时对 `AVLayerVideoGravityResizeAspectFill/Aspect` 的 `expect`：可选常量缺失现在返回“视频填充模式不可用/视频适应模式不可用”，不会因 Rust panic 直接 Abort trap。
+- [x] 修复停止动态壁纸时对不存在会话的 `map.remove(...).expect(...)`：现在返回包含显示器 ID 的可读错误，并保留其他显示器状态。
+- [x] `cargo fmt --manifest-path rust-core/Cargo.toml`、`cargo test --manifest-path rust-core/Cargo.toml`（18 项）与 `cargo clippy --manifest-path rust-core/Cargo.toml --all-targets -- -D warnings` 通过。
+- [ ] 仍未完成解锁后的 GUI 复测：需使用本轮重建的 `.app` 打开超过 3 秒，确认不再新增 `.ips`，再应用 MP4/MOV 验证桌面画面、循环、暂停/恢复、停止与菜单栏控制。不能用构建和单测替代这项。
+
 ## 2026-09-24 原生「设置」窗口补齐
 
 - [x] 修复 macOS 应用菜单 `⌘,` 原本打开空白 `Settings { EmptyView() }`：现提供 SwiftUI 设置窗，可查看/重选媒体目录、阅读文件访问说明，并在 Finder 中定位配置与缓存。目录选择复用同一 Rust 持久化/错误返回路径，不另造第二份配置。
